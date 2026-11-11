@@ -103,6 +103,30 @@
 .pdf-controls .pdf-control-group{max-width:100%;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;justify-content:flex-start;padding-bottom:3px}
 .pdf-control-group button{flex:0 0 auto}
 }
+
+/* v1.6.7: the import view must scroll as a whole, not clip the form below its viewport */
+.excel-root.excel-import-mode{
+ display:block!important;
+ overflow-y:auto!important;
+ overflow-x:hidden!important;
+ height:100%;
+ min-height:0;
+ -webkit-overflow-scrolling:touch;
+ touch-action:pan-y;
+ overscroll-behavior-y:contain;
+ padding-bottom:calc(22px + env(safe-area-inset-bottom));
+}
+.excel-root.excel-import-mode>*{margin-bottom:14px}
+.excel-root.excel-import-mode .excel-mapping{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}
+.excel-root.excel-import-mode .excel-table-wrap{max-height:50vh;min-height:140px;overflow:auto;touch-action:pan-x pan-y}
+.excel-root.excel-import-mode .excel-source{display:block;min-height:0}
+.excel-root.excel-import-mode .excel-bottom{position:relative;min-height:44px}
+@media(max-width:680px){
+.excel-root.excel-import-mode{padding:12px 10px calc(40px + env(safe-area-inset-bottom));}
+.excel-root.excel-import-mode .excel-controls,.excel-root.excel-import-mode .excel-import-options{display:grid;grid-template-columns:minmax(0,1fr);gap:9px}
+.excel-root.excel-import-mode .excel-mapping{grid-template-columns:repeat(2,minmax(0,1fr))}
+.excel-root.excel-import-mode .excel-bottom{gap:8px}
+}
 </style></head><body><div id="layout"><aside class="side"><div class="brand"><div class="logo">⌂</div><strong>住有计划</strong><small>INTERIOR BUDGET</small></div><button class="nav active" data-page="overview"><span>◫</span> 预算总览</button><button class="nav" data-page="items"><span>▤</span> 预算明细</button><button class="nav" data-page="files"><span>▣</span> 文件与报价</button><button class="nav" data-page="payments"><span>◈</span> 付款记录</button><button class="nav" data-page="settings"><span>⚙</span> 设置与同步</button><div class="sidefoot"><div id="syncLabel" class="status">本地数据</div><div style="margin-top:8px">首次授权后保持 30 天登录；联网时自动同步。</div></div></aside><main class="main">
 <section class="page on" id="overview"><div class="top"><div><div class="eyebrow">MY HOME · RENOVATION</div><h1>我的装修预算</h1><p>从构想到入住，每一笔费用都清清楚楚。</p></div><button class="btn primary" data-add="item">＋ 添加项目</button></div><div class="grid" id="metrics"></div><div class="section two"><article class="card"><div class="headrow"><h2>已知费用构成</h2><span class="chip">分类统计</span></div><div id="breakdown"></div></article><article class="card"><div class="headrow"><h2>待确认项目</h2><button class="linkbtn" data-goto="items">查看全部 →</button></div><div id="pending"></div></article></div><div class="section card"><div class="headrow"><h2>最近付款</h2><button class="linkbtn" data-goto="payments">管理付款 →</button></div><div id="recent"></div></div></section>
 <section class="page" id="items"><div class="top"><div><div class="eyebrow">PROJECTS & COSTS</div><h1>预算明细</h1><p>按类别管理，每项都可记录估价、报价与成交价。</p></div><div class="toolbar"><button class="btn" data-add="category">＋ 类别</button><button class="btn primary" data-add="item">＋ 项目</button></div></div><div class="filter"><input class="field" style="flex:1;min-width:150px" id="search" placeholder="搜索项目、品牌、备注…"><select class="field" style="width:auto" id="filterStatus"><option value="">全部状态</option><option value="pending">未报价</option><option value="quoted">已报价</option><option value="confirmed">已确认</option><option value="ordered">已购买/签约</option></select></div><div id="categories"></div></section>
