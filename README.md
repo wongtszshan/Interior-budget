@@ -82,3 +82,8 @@
 - Worker 登录及 30 天令牌、同源限制保留；不向外开放 R2 公共端点。大文件请求需要客户端联网并确认同步成功，上传前先缓存在 IndexedDB。
 - Cloudflare Free 计划当前入站请求大小上限 100 MB，故应用保守使用 80 MiB；超过此大小的文件未来可使用 R2 分片上传。
 - R2 免费额度以官方最新价格页为准，超过免费额度可能产生存储及操作费用。
+
+## v1.6 — 统一 R2 附件存储
+- 所有新上传附件（PDF、Excel、图片）统一保存在私有 Cloudflare R2 存储桶 `interior-budget-private-files`。
+- GitHub 私库 `data/budget.json` 只保存预算记录和文件索引，旧 `storage: github` 附件仍有兼容读取接口。
+- 文件通过 Worker 身份验证传输，最大 80MiB，不对外公开 R2 存储桶。用户授权删除的两份旧 PDF 会同时从 `documents/` 与预算文件索引中清除；请先确保留有原文件用于重新上传。
