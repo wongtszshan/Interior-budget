@@ -46,28 +46,30 @@ function show({blob,file,mount,categories,existingNames,onImport}){
   const bytes=await blob.arrayBuffer();
   const wb=XLSX.read(bytes,{type:"array",dense:true,cellFormula:false,cellHTML:false,bookVBA:false});
   if(!wb.SheetNames.length)throw Error("这个 Excel 文件没有工作表");
-  let sheet=wb.SheetNames[0],header=0,mapping={},selected=new Set(),allRows=[],columns=[],mappedRows=[],mode="view";
+  let sheet=wb.SheetNames[0],header=0,mapping={},selected=new Set(),allRows=[],columns=[],mappedRows=[],mode="view",viewLimit=250,rawLimit=200;
   const root=document.createElement("div");root.className="excel-root";mount.replaceChildren(root);
   function loadSheet(){
    let worksheet=wb.Sheets[sheet];
    allRows=XLSX.utils.sheet_to_json(worksheet,{header:1,defval:"",raw:false,blankrows:false})
-    .slice(0,2001).map(r=>r.slice(0,80).map(x=>toText(x)));
+    .slice(0,10001).map(r=>r.slice(0,80).map(x=>toText(x)));
    const width=Math.min(80,Math.max(1,...allRows.map(r=>r.length)));
    columns=Array.from({length:width},(_,i)=>allRows[header]?.[i]||"");
-   mapping=guessed(columns);selected=new Set();renderMode();
+   mapping=guessed(columns);selected=new Set();viewLimit=250;rawLimit=200;renderMode();
   }
   function renderMode(){if(mode==="view")renderViewer();else render()}
   function renderViewer(){
    const sheetOptions=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?'selected':'')+'>'+esc(v)+'</option>').join("");
    const maxColumns=Math.min(60,Math.max(1,...allRows.map(r=>r.length)));
-   const maxRows=Math.min(250,allRows.length);
+   const maxRows=Math.min(viewLimit,allRows.length);
    const headers=Array.from({length:maxColumns},(_,i)=>'<th>'+esc(i<26?String.fromCharCode(65+i):String.fromCharCode(65+Math.floor(i/26)-1)+String.fromCharCode(65+i%26))+'</th>').join("");
    const trs=allRows.slice(0,maxRows).map((row,i)=>'<tr><th>'+Number(i+1)+'</th>'+Array.from({length:maxColumns},(_,j)=>'<td>'+esc(row[j]??"")+'</td>').join("")+'</tr>').join("");
    root.innerHTML='<div class="excel-view-toolbar"><label>工作表 <select class="field" id="excelViewSheet">'+sheetOptions+'</select></label><button type="button" class="btn primary" id="excelSwitchImport">导入预算明细</button></div>'+
-   '<div class="excel-notice">当前为只读预览，不会导入或修改预算。左右滑动查看列，上下滑动查看行。<span>显示前 '+maxRows+' 行，'+maxColumns+' 列；完整内容请下载原文件。</span></div>'+
-   '<div class="excel-sheet-scroller" tabindex="0" aria-label="Excel 工作表预览"><table class="excel-sheet-table"><thead><tr><th>行</th>'+headers+'</tr></thead><tbody>'+trs+'</tbody></table></div>';
+   '<div class="excel-notice">当前为只读预览，不会导入或修改预算。左右滑动查看列，上下滑动查看行。当前显示 '+maxRows+' / '+allRows.length+' 行；此模式不展示 Excel 内嵌图片和完整排版，如需查看请点顶部「用其他 App 打开」。</div>'+
+   '<div class="excel-sheet-scroller" tabindex="0" aria-label="Excel 工作表预览"><table class="excel-sheet-table"><thead><tr><th>行</th>'+headers+'</tr></thead><tbody>'+trs+'</tbody></table></div>'+
+   (maxRows<allRows.length?'<button type="button" class="btn" id="excelViewMore">继续显示后面 250 行（剩余 '+(allRows.length-maxRows)+' 行）</button>':'');
    root.querySelector("#excelViewSheet").onchange=e=>{sheet=e.target.value;header=0;loadSheet()};
    root.querySelector("#excelSwitchImport").onclick=()=>{mode="import";renderMode()};
+   const more=root.querySelector("#excelViewMore");if(more)more.onclick=()=>{viewLimit+=250;renderViewer()};
   }
   function picked(row,key){const i=mapping[key];return i===""||i===undefined?"":toText(row[Number(i)]);}
   function getRows(){
@@ -94,17 +96,18 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    const sheets=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?"selected":"")+'>'+esc(v)+'</option>').join("");
    const selectFields=keys.map(k=>'<label class="excel-map-field">'+esc(k.label)+'<select class="field" data-column="'+k.key+'">'+colOptions(columns,mapping[k.key],k.key!=="name")+'</select></label>').join("");
    const display=mappedRows.slice(0,1000);
-   const rawPreview=allRows.slice(0,40).map((r,i)=>"<tr><td>"+(i+1)+"</td>"+Array.from({length:Math.min(14,columns.length)},(_,j)=>"<td>"+esc(r[j]??"")+"</td>").join("")+"</tr>").join("");
+   const rawPreview=allRows.slice(0,rawLimit).map((r,i)=>"<tr><td>"+(i+1)+"</td>"+Array.from({length:Math.min(14,columns.length)},(_,j)=>"<td>"+esc(r[j]??"")+"</td>").join("")+"</tr>").join("");
    const rows=display.map(r=>'<tr class="'+(r.duplicate?"excel-duplicate":"")+'"><td><input type="checkbox" data-row="'+r.index+'" '+(selected.has(r.index)?"checked":"")+' '+(!r.valid||r.duplicate?"disabled":"")+'></td><td>'+(r.index+1)+'</td><td>'+esc(r.name)+(r.duplicate?' <span class="chip warn">名称重复</span>':!r.valid?' <span class="chip warn">缺少有效金额</span>':"")+'</td><td>'+esc(r.quantity)+'</td><td>'+esc(r.unit)+'</td><td>'+ (r.unitPrice===null?"—":"¥"+r.unitPrice.toFixed(2))+'</td><td>'+(r.total===null?"—":"¥"+r.total.toFixed(2))+'</td></tr>').join("");
    root.innerHTML='<div class="excel-mode-toolbar"><button type="button" class="btn" id="excelBackView">← 返回表格预览</button><strong>选择报价明细导入预算</strong></div><div class="excel-controls"><label>工作表<select class="field" id="excelSheet">'+sheets+'</select></label><label>表头所在行<select class="field" id="excelHeader">'+headerOpts+'</select></label></div>'+
    '<div class="excel-notice">表格仅在当前浏览器解析，不会传给 Excel 解析服务。公式不会在此重新计算；请核对报价金额、合并单元格及最终合同报价。</div>'+
-   '<details class="excel-source"><summary>查看原始工作表（前 40 行，前 14 列）</summary><div class="excel-table-wrap"><table class="excel-table"><tbody>'+rawPreview+'</tbody></table></div></details><div class="excel-mapping">'+selectFields+'</div>'+
+   '<details class="excel-source" open><summary>查看原始工作表（当前 '+Math.min(rawLimit,allRows.length)+' / '+allRows.length+' 行，前 14 列）</summary><div class="excel-table-wrap"><table class="excel-table"><tbody>'+rawPreview+'</tbody></table></div>'+(rawLimit<allRows.length?'<button type="button" class="btn" id="excelRawMore">继续显示后面 200 行</button>':'')+'</details><div class="excel-mapping">'+selectFields+'</div>'+
    '<div class="excel-import-options"><label>导入到预算分类<select class="field" id="excelCategory">'+cats+'</select></label><label>供应商 / 公司<input class="field" id="excelVendor" placeholder="可选，填报价方"></label></div>'+
    '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示 '+display.length+' 项</span></div>'+
    '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>单价</th><th>总金额</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
    '<div class="excel-bottom"><button class="btn" id="excelSelectNone">取消选择</button><button class="btn primary" id="excelImport" type="button">确认导入选中的项目</button></div>'+
    '<p class="info">导入只新增独立的预算项目，不修改原 Excel、不覆盖已有项目，也不计入已付款。名称与现有项目或表内其他明细相同的行默认跳过；仅识别有金额的明细行。最多导入 1000 项。</p>';
    root.querySelector("#excelBackView").onclick=()=>{mode="view";renderMode()};
+   const moreRaw=root.querySelector("#excelRawMore");if(moreRaw)moreRaw.onclick=()=>{rawLimit+=200;renderMode()};
    root.querySelector("#excelSheet").onchange=e=>{sheet=e.target.value;header=0;loadSheet()};
    root.querySelector("#excelHeader").onchange=e=>{header=Number(e.target.value);columns=Array.from({length:Math.max(1,...allRows.map(r=>r.length))},(_,i)=>allRows[header]?.[i]||"");mapping=guessed(columns);selected.clear();renderMode()};
    root.querySelectorAll("[data-column]").forEach(el=>el.onchange=()=>{mapping[el.dataset.column]=el.value;selected.clear();renderMode()});
