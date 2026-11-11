@@ -20,9 +20,14 @@ function show({blob,mount,file}){
  const tasks=new Map();
  mount.replaceChildren();
  const root=document.createElement("div");root.className="pdf-viewer";
- root.innerHTML='<div class="pdf-controls"><span class="pdf-counter">正在打开 PDF…</span><span class="pdf-control-group"><button type="button" data-zoom="-1" title="缩小">−</button><span class="pdf-zoom-label">100%</span><button type="button" data-zoom="1" title="放大">＋</button><button type="button" data-fit="1">适应宽度</button></span></div><div class="pdf-scroll" tabindex="0" aria-label="PDF 连续阅读区"></div>';
+ root.innerHTML='<div class="pdf-controls"><span class="pdf-counter">正在打开 PDF…</span><span class="pdf-control-group"><button type="button" data-prev="1" title="上一页">‹</button><span class="pdf-current">1 / 1</span><button type="button" data-next="1" title="下一页">›</button><button type="button" data-zoom="-1" title="缩小">−</button><span class="pdf-zoom-label">100%</span><button type="button" data-zoom="1" title="放大">＋</button><button type="button" data-fit="1">适宽</button></span></div><div class="pdf-scroll" tabindex="0" aria-label="PDF 连续阅读区"></div>';
  mount.appendChild(root);
- const container=root.querySelector(".pdf-scroll"),counter=root.querySelector(".pdf-counter"),zoomLabel=root.querySelector(".pdf-zoom-label");
+ const container=root.querySelector(".pdf-scroll"),counter=root.querySelector(".pdf-counter"),zoomLabel=root.querySelector(".pdf-zoom-label"),currentLabel=root.querySelector(".pdf-current");
+ let currentPage=1;
+ const goPage=n=>{if(!pdf)return;const page=clamp(n,1,pdf.numPages);const holder=container.querySelector('[data-pdf-page="'+page+'"]');if(!holder)return;currentPage=page;currentLabel.textContent=page+" / "+pdf.numPages;holder.scrollIntoView({behavior:"smooth",block:"start"});draw(page,generation)};
+ root.querySelector("[data-prev]").onclick=()=>goPage(currentPage-1);
+ root.querySelector("[data-next]").onclick=()=>goPage(currentPage+1);
+ container.addEventListener("scroll",()=>{if(!pdf)return;const children=[...container.querySelectorAll("[data-pdf-page]")];let nearest=currentPage,dist=Infinity;const top=container.getBoundingClientRect().top;for(const child of children){const d=Math.abs(child.getBoundingClientRect().top-top);if(d<dist){dist=d;nearest=Number(child.dataset.pdfPage)}}if(nearest!==currentPage){currentPage=nearest;currentLabel.textContent=nearest+" / "+pdf.numPages}for(const n of [nearest,nearest+1,nearest+2])if(n<=pdf.numPages)draw(n,generation)},{passive:true});
  const isActive=()=>!closed&&mount.contains(root)&&document.body.contains(root);
  const stopTasks=()=>{for(const task of tasks.values())try{task.cancel()}catch{}tasks.clear()};
  const close=()=>{closed=true;generation++;observer?.disconnect();observer=null;stopTasks();try{pdf?.destroy()}catch{}};
@@ -51,7 +56,7 @@ function show({blob,mount,file}){
   if(!pdf||!isActive())return;
   generation++;stopTasks();observer?.disconnect();
   const round=generation;container.replaceChildren();
-  counter.textContent="共 "+pdf.numPages+" 页 · 向下滚动连续阅读";
+  counter.textContent="共 "+pdf.numPages+" 页 · 上下滑动";currentPage=1;currentLabel.textContent="1 / "+pdf.numPages;
   zoomLabel.textContent=Math.round(zoom*100)+"%";
   observer=new IntersectionObserver(entries=>{
    for(const entry of entries)if(entry.isIntersecting){const n=Number(entry.target.dataset.pdfPage);draw(n,round)}
@@ -61,6 +66,7 @@ function show({blob,mount,file}){
    const label=document.createElement("div");label.className="pdf-page-number";label.textContent="第 "+n+" / "+pdf.numPages+" 页";
    holder.appendChild(label);container.appendChild(holder);observer.observe(holder);
   }
+  for(const n of [1,2,3])if(n<=pdf.numPages)draw(n,round);
  }
  root.querySelectorAll("[data-zoom]").forEach(b=>b.onclick=()=>{const next=clamp(Math.round((zoom+Number(b.dataset.zoom)*.2)*10)/10,.6,3);if(next!==zoom){zoom=next;refresh()}});
  root.querySelector("[data-fit]").onclick=()=>{zoom=1;refresh()};
