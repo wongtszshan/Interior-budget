@@ -73,3 +73,12 @@
 - 名称与已存在预算项目重复的行默认跳过。零金额或缺少有效金额的行不会导入；项目合计金额有值而单价缺失时使用「总价 ÷ 数量」计算单价。最多导入前 1000 个有效行。
 - Excel 中公式展示的是文件已保存的缓存值，不会重新计算公式。复杂的多级合并表头、带隐藏行的特殊报价表可能需要手动调整或重新排版。
 - 表格源文件保留在私库的 `documents/`；自动同步成功后，新增的预算数据写入私库的 `data/budget.json`。
+
+## v1.5 — Hybrid GitHub + R2 attachments
+
+- 新建独立私有 R2 存储桶 `interior-budget-private-files`，不启用公共访问 URL；Worker 绑定名称 `DOCUMENTS`。
+- 文件单份最大 80 MiB。小于等于 7 MiB 的文件仍保存到 GitHub 私库 `documents/`；超过 7 MiB 自动通过 Worker 流式写入 R2 `documents/{id}.{ext}`，避免 Base64 放大与 Git 历史膨胀。
+- 文件元信息记录在 GitHub 私库 `data/budget.json` 中，标记 `storage: 'github' | 'r2'`，已有附件兼容旧记录。
+- Worker 登录及 30 天令牌、同源限制保留；不向外开放 R2 公共端点。大文件请求需要客户端联网并确认同步成功，上传前先缓存在 IndexedDB。
+- Cloudflare Free 计划当前入站请求大小上限 100 MB，故应用保守使用 80 MiB；超过此大小的文件未来可使用 R2 分片上传。
+- R2 免费额度以官方最新价格页为准，超过免费额度可能产生存储及操作费用。
