@@ -29,10 +29,39 @@ if(pathname==="/api/session"&&request.method==="GET")return respond({ok:true});
 if(pathname==="/api/health"&&request.method==="GET")return respond({ok:true,repo:env.GITHUB_REPO||REPO});
 if(pathname==="/api/data"&&request.method==="GET"){try{const f=await github(env,DATA_PATH);return respond({sha:f.sha,data:JSON.parse(decode64(f.content))})}catch(e){if(e.status===404)return respond({sha:null,data:null});throw e}}
 if(pathname==="/api/data"&&request.method==="PUT"){const b=await request.json();if(!b.data||!Array.isArray(b.data.items)||!Array.isArray(b.data.categories)||!Array.isArray(b.data.payments)||!Array.isArray(b.data.files))return respond({error:"Invalid data"},400);if(JSON.stringify(b.data).length>900000)return respond({error:"Budget data is too large"},413);let actual=null;try{const f=await github(env,DATA_PATH);actual=f.sha}catch(e){if(e.status!==404)throw e}if((b.sha||null)!==(actual||null))return respond({error:"Cloud data changed; reload before saving"},409);const payload={message:"Sync renovation budget",content:encode64(JSON.stringify(b.data,null,2)),...(actual?{sha:actual}:{})};const file=await github(env,DATA_PATH,"PUT",payload);return respond({ok:true,sha:file.content.sha})}
+
+// Files larger than 7 MiB are streamed into a private R2 bucket.
+// No public bucket domain and no long-lived R2 credentials are exposed.
+const r2Match=pathname.match(/^\/api\/r2-file\/([a-f0-9-]{16,48})$/i);
+if(r2Match&&request.method==="PUT"){
+ if(!env.DOCUMENTS)return respond({error:"Private R2 bucket is not configured"},503);
+ const id=r2Match[1],mime=request.headers.get("X-File-Type")||"";
+ const mimeTypes={"application/pdf":"pdf","image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"xlsx","application/vnd.ms-excel":"xls"};
+ const ext=mimeTypes[mime];
+ if(!ext)return respond({error:"Unsupported upload type"},400);
+ const size=Number(request.headers.get("Content-Length")||"0");
+ if(!Number.isFinite(size)||size<=0||size>80*1024*1024)return respond({error:"File must be between 1 byte and 80 MiB"},413);
+ const key="documents/"+id+"."+ext;
+ const object=await env.DOCUMENTS.put(key,request.body,{httpMetadata:{contentType:mime},customMetadata:{id}});
+ return respond({ok:true,storage:"r2",key,size:object.size});
+}
 if(pathname==="/api/file"&&request.method==="POST"){const b=await request.json();if(!validId(b.id)||typeof b.name!=="string"||typeof b.base64!=="string")return respond({error:"Invalid file"},400);const mimeTypes={"application/pdf":"pdf","image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"xlsx","application/vnd.ms-excel":"xls"};const ext=mimeTypes[b.mime];if(!ext)return respond({error:"Invalid file type"},400);if(b.base64.length>10*1024*1024)return respond({error:"File too large"},413);if(!/^[A-Za-z0-9+/]+={0,2}$/.test(b.base64))return respond({error:"Invalid file encoding"},400);const path="documents/"+b.id+"."+ext;let exists=false;try{await github(env,path);exists=true}catch(e){if(e.status!==404)throw e}if(exists)return respond({ok:true,alreadyUploaded:true,path});await github(env,path,"PUT",{message:"Upload private renovation attachment",content:b.base64});return respond({ok:true,path})}
 const match=pathname.match(/^\/api\/file\/([a-f0-9-]{16,48})$/i);
 if(match){const id=match[1];let meta=null;try{const f=await github(env,DATA_PATH);const d=JSON.parse(decode64(f.content));meta=(d.files||[]).find(x=>x.id===id)}catch(e){if(e.status!==404)throw e}
 const mimeTypes={"application/pdf":"pdf","image/jpeg":"jpg","image/png":"png","image/webp":"webp","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"xlsx","application/vnd.ms-excel":"xls"};
+if(meta?.storage==="r2"&&request.method==="GET"){
+ if(!meta.remote||!env.DOCUMENTS)return respond({error:"File unavailable"},404);
+ const ext=mimeTypes[meta.mime];if(!ext)return respond({error:"Unsupported type"},400);
+ const obj=await env.DOCUMENTS.get("documents/"+id+"."+ext);
+ if(!obj)return respond({error:"File not found"},404);
+ return new Response(obj.body,{headers:{...h,"Content-Type":meta.mime,"Content-Disposition":"inline; filename=\"attachment."+ext+"\"","X-Content-Type-Options":"nosniff"}});
+}
+if(meta?.storage==="r2"&&request.method==="DELETE"){
+ if(!meta.remote||!env.DOCUMENTS)return respond({error:"File unavailable"},404);
+ const ext=mimeTypes[meta.mime];if(!ext)return respond({error:"Unsupported type"},400);
+ await env.DOCUMENTS.delete("documents/"+id+"."+ext);
+ return respond({ok:true});
+}
 if(request.method==="GET"){if(!meta||!meta.remote)return respond({error:"File not found"},404);const ext=mimeTypes[meta.mime];if(!ext)return respond({error:"Unsupported file"},400);const filePath="documents/"+id+"."+ext;const repo=env.GITHUB_REPO||REPO;const rawResponse=await fetch("https://api.github.com/repos/"+repo+"/contents/"+filePath,{headers:{"Authorization":"Bearer "+env.GITHUB_TOKEN,"Accept":"application/vnd.github.raw+json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"interior-budget-worker"},cache:"no-store"});if(!rawResponse.ok)return respond({error:"File download failed"},rawResponse.status===404?404:502);return new Response(rawResponse.body,{headers:{...h,"Content-Type":meta.mime,"Content-Disposition":"inline; filename=\"attachment."+ext+"\"","X-Content-Type-Options":"nosniff"}})}
 if(request.method==="DELETE"){if(!meta||!meta.remote)return respond({error:"File not found"},404);const ext=mimeTypes[meta.mime];if(!ext)return respond({error:"Unsupported file"},400);const path="documents/"+id+"."+ext;const content=await github(env,path);await github(env,path,"DELETE",{message:"Delete private renovation attachment",sha:content.sha});return respond({ok:true})}}
 return respond({error:"Not found"},404)
