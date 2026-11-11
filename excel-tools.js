@@ -35,7 +35,8 @@ const keys=[
  {key:"quantity",label:"数量 / 面积",pattern:/数量|工程量|面积|用量|数量\/|数量（/},
  {key:"unit",label:"单位",pattern:/^单位$|计量单位|单位\/|单位（/},
  {key:"unitPrice",label:"单价",pattern:/单价|综合单价|报价单价|含税单价/},
- {key:"total",label:"行金额（不选分组小计）",pattern:/^金额$|^总价$|^合价$|合计金额|报价金额|行金额/}
+ {key:"total",label:"商家行金额",pattern:/^金额$|^总价$|^合价$|合计金额|报价金额|行金额/},
+ {key:"groupTotal",label:"分组小计（仅核对，不导入）",pattern:/单项合计|分组合计|分组小计|^组小计$/}
 ];
 function guessed(cols){
  const used=new Set(),map={};
@@ -141,10 +142,13 @@ function show({blob,file,mount,categories,existingNames,onImport}){
     const total=toNumber(picked(row,"total"));
     // A zero amount is not an approved quote; never infer a positive price over it.
     const valid=qty>0&&total!==0&&total!==null&&total>0 || qty>0&&total===null&&unitPrice!==null&&unitPrice>0;
-    const price=qty>0?(total!==null?total/qty:unitPrice):null;
+    const price=unitPrice;
+    const effectiveTotal=total!==null?total:(unitPrice!==null?Math.round(qty*unitPrice*100)/100:null);
+    const diff=total!==null&&unitPrice!==null?Math.round((total-qty*unitPrice)*100)/100:null;
+    const groupTotal=toNumber(picked(row,"groupTotal"));
     const duplicate=seen.has(fullName.toLowerCase());
     if(duplicate===false)seen.add(fullName.toLowerCase());
-    rows.push({index:i,name:fullName,baseName,group,quantity:qty,unit:picked(row,"unit")||(/面积|㎡|m²|m2/.test(columns[Number(mapping.quantity)]||"")?"㎡":"项"),unitPrice:price,total:total??(price!==null?price*qty:null),valid,duplicate});
+    rows.push({index:i,name:fullName,baseName,group,quantity:qty,unit:picked(row,"unit")||(/面积|㎡|m²|m2/.test(columns[Number(mapping.quantity)]||"")?"㎡":"项"),unitPrice:price,total:effectiveTotal,sourceTotal:total,difference:diff,groupTotal,valid,duplicate});
    }
    return rows.slice(0,1000);
   }
@@ -157,14 +161,26 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    const sheets=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?"selected":"")+'>'+esc(v)+'</option>').join("");
    const selectFields=keys.map(k=>'<label class="excel-map-field">'+esc(k.label)+'<select class="field" data-column="'+k.key+'">'+colOptions(columns,mapping[k.key],k.key!=="name")+'</select></label>').join("");
    const display=mappedRows.slice(0,1000);
+   const groups=new Map();
+   // H-column group subtotals are verification only, never added to the budget.
+   for(const r of mappedRows){
+    if(!r.group)continue;
+    let g=groups.get(r.group);
+    if(!g){g={amount:0,subtotal:null,lines:0};groups.set(r.group,g)}
+    if(r.total!==null&&r.valid){g.amount+=r.total;g.lines++}
+    if(r.groupTotal!==null)g.subtotal=r.groupTotal;
+   }
+   const groupChecks=[...groups].filter(([,g])=>g.subtotal!==null).map(([name,g])=>'<div class="excel-group-check">'+esc(name)+'：明细 ¥'+g.amount.toFixed(2)+' / 商家小计 ¥'+g.subtotal.toFixed(2)+(Math.abs(g.amount-g.subtotal)>.01?' <strong>差额 ¥'+(g.subtotal-g.amount).toFixed(2)+'（请核对）</strong>':' <strong>吻合</strong>')+'</div>').join("");
+
    const rawPreview=sourceTable(rawLimit,Math.min(14,columns.length));
-   const rows=display.map(r=>'<tr class="'+(r.duplicate?"excel-duplicate":"")+'"><td><input type="checkbox" data-row="'+r.index+'" '+(selected.has(r.index)?"checked":"")+' '+(!r.valid||r.duplicate?"disabled":"")+'></td><td>'+(r.index+1)+'</td><td>'+esc(r.name)+(r.duplicate?' <span class="chip warn">名称重复</span>':!r.valid?' <span class="chip warn">缺少有效金额</span>':"")+'</td><td>'+esc(r.quantity)+'</td><td>'+esc(r.unit)+'</td><td>'+ (r.unitPrice===null?"—":"¥"+r.unitPrice.toFixed(2))+'</td><td>'+(r.total===null?"—":"¥"+r.total.toFixed(2))+'</td></tr>').join("");
+   const rows=display.map(r=>'<tr class="'+(r.duplicate?"excel-duplicate":"")+'"><td><input type="checkbox" data-row="'+r.index+'" '+(selected.has(r.index)?"checked":"")+' '+(!r.valid||r.duplicate?"disabled":"")+'></td><td>'+(r.index+1)+'</td><td>'+esc(r.name)+(r.duplicate?' <span class="chip warn">名称重复</span>':!r.valid?' <span class="chip warn">缺少有效金额</span>':"")+'</td><td>'+esc(r.quantity)+'</td><td>'+esc(r.unit)+'</td><td>'+ (r.unitPrice===null?"—":"¥"+r.unitPrice.toFixed(2))+'</td><td>'+(r.total===null?"—":"¥"+r.total.toFixed(2))+'</td><td>'+(r.difference===null?"—":(Math.abs(r.difference)<.005?"一致":("¥"+(r.difference>0?"+":"")+r.difference.toFixed(2))))+'</td></tr>').join("");
    root.innerHTML='<div class="excel-mode-toolbar"><button type="button" class="btn" id="excelBackView">← 返回表格预览</button><strong>选择报价明细导入预算</strong></div><div class="excel-controls"><label>工作表<select class="field" id="excelSheet">'+sheets+'</select></label><label>表头所在行<select class="field" id="excelHeader">'+headerOpts+'</select></label></div>'+
-   '<div class="excel-notice">请按<strong>Excel 原文件的列字母</strong>选择，不是按示例值筛选。对于你提供的定制柜报价：A=空间、B=项目、E=面积/数量、F=单价、G=行金额；H 是分组小计，不要选。预览保留合并单元格关系，但不完全复刻 Excel 样式。</div>'+
+   '<div class="excel-notice">请按<strong>Excel 原文件的列字母</strong>选择，不是按示例值筛选。对于你提供的定制柜报价：A=空间、B=项目、E=面积/数量、F=单价、G=行金额；H 是分组小计，仅核对不计价。报价金额以 G 为准，保留 F 的原始单价并显示两者差额。预览保留合并单元格关系，但不完全复刻 Excel 样式。</div>'+
    '<details class="excel-source" open><summary>查看原始工作表（当前 '+Math.min(rawLimit,allRows.length)+' / '+allRows.length+' 行，前 14 列）</summary><div class="excel-table-wrap">'+rawPreview+'</div>'+(rawLimit<allRows.length?'<button type="button" class="btn" id="excelRawMore">继续显示后面 200 行</button>':'')+'</details><div class="excel-mapping">'+selectFields+'</div>'+
    '<div class="excel-import-options"><label>导入到预算分类<select class="field" id="excelCategory">'+cats+'</select></label><label>供应商 / 公司<input class="field" id="excelVendor" placeholder="可选，填报价方"></label></div>'+
    '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示 '+display.length+' 项</span></div>'+
-   '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>单价</th><th>总金额</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+   '<details class="excel-source"><summary>分组小计核对（不计入预算）</summary><div class="excel-group-results">'+(groupChecks||'当前没有可核对的分组小计；可手动将 H 列映射到“分组小计”')+'</div></details>'+
+   '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>原始单价</th><th>商家行金额</th><th>计算差额</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
    '<div class="excel-bottom"><button class="btn" id="excelSelectNone">取消选择</button><button class="btn primary" id="excelImport" type="button">确认导入选中的项目</button></div>'+
    '<p class="info">导入只新增独立的预算项目，不修改原 Excel、不覆盖已有项目，也不计入已付款。名称与现有项目或表内其他明细相同的行默认跳过；仅识别有金额的明细行。最多导入 1000 项。</p>';
    root.querySelector("#excelBackView").onclick=()=>{mode="view";renderMode()};
@@ -179,9 +195,9 @@ function show({blob,file,mount,categories,existingNames,onImport}){
     const chosen=mappedRows.filter(r=>selected.has(r.index)&&r.valid&&!r.duplicate);
     if(!chosen.length)return alert("请先选择有效的报价明细行");
     const categoryId=root.querySelector("#excelCategory").value, vendor=root.querySelector("#excelVendor").value.trim();
-    const total=chosen.reduce((a,r)=>a+(r.unitPrice*r.quantity),0);
+    const total=chosen.reduce((a,r)=>a+(r.total||0),0);
     if(!confirm("确定新增 "+chosen.length+" 个预算项目，合计约 ¥"+total.toLocaleString("zh-CN",{maximumFractionDigits:2})+"？\n原文件和已有项目不会修改。"))return;
-    onImport(chosen.map(r=>({name:r.name,quantity:r.quantity,unit:r.unit,quote:Math.round(r.unitPrice*10000)/10000,categoryId,vendor,notes:"来源："+file.name+" / "+sheet+" / 第 "+(r.index+1)+" 行"+(r.group?"；空间："+r.group:"")})));
+    onImport(chosen.map(r=>({name:r.name,quantity:r.quantity,unit:r.unit,quote:r.unitPrice,quoteTotal:r.sourceTotal,categoryId,vendor,notes:"来源："+file.name+" / "+sheet+" / 第 "+(r.index+1)+" 行"+(r.group?"；空间："+r.group:"")})));
    };
   }
   loadSheet();
