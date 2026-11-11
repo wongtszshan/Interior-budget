@@ -67,7 +67,7 @@ async function openFile(id){
  const f=state.files.find(x=>x.id===id);if(!f)return;
  closePreview();
  const overlay=document.createElement("div");overlay.id="filePreviewOverlay";overlay.className="preview-overlay";
- overlay.innerHTML='<div class="preview-shell" role="dialog" aria-modal="true" aria-label="文件预览"><div class="preview-top"><div class="preview-title"></div><div class="preview-tools"><button type="button" class="btn small" id="previewDownload" disabled>下载</button><button type="button" class="btn small" id="previewClose">关闭</button></div></div><div class="preview-body" id="previewBody"><div class="preview-message">正在读取文件…</div></div></div>';
+ overlay.innerHTML='<div class="preview-shell" role="dialog" aria-modal="true" aria-label="文件预览"><div class="preview-top"><div class="preview-title"></div><div class="preview-tools"><button type="button" class="btn small" id="previewNative" disabled>用其他 App 打开</button><button type="button" class="btn small" id="previewDownload" disabled>下载</button><button type="button" class="btn small" id="previewClose">关闭</button></div></div><div class="preview-body" id="previewBody"><div class="preview-message">正在读取文件…</div></div></div>';
  document.body.appendChild(overlay);
  overlay.querySelector(".preview-title").textContent=f.name;
  overlay.querySelector("#previewClose").onclick=closePreview;
@@ -86,6 +86,23 @@ async function openFile(id){
   const mime=f.mime||blob.type;
   const excelMime=["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet","application/vnd.ms-excel"];if(!["application/pdf","image/jpeg","image/png","image/webp",...excelMime].includes(mime))throw Error("此文件格式暂不支持预览或下载");
   previewObjectUrl=URL.createObjectURL(new Blob([blob],{type:mime}));
+  const nativeButton=overlay.querySelector("#previewNative");
+  nativeButton.disabled=false;
+  nativeButton.onclick=async()=>{
+   const name=f.name||"attachment",file=new File([blob],name,{type:mime});
+   try{
+    if(navigator.share&&(!navigator.canShare||navigator.canShare({files:[file]}))){
+     await navigator.share({files:[file],title:name});
+     return;
+    }
+    if(/iPad|iPhone|iPod/.test(navigator.userAgent)&&!navigator.share){
+     toast("当前浏览器不支持分享原文件，请点击「下载」，然后在文件 App 中打开");
+    }else{
+     toast("当前浏览器不支持直接传给其他 App，已准备下载原文件");
+    }
+    const link=document.createElement("a");link.href=previewObjectUrl;link.download=name;document.body.appendChild(link);link.click();link.remove();
+   }catch(e){if(e.name!=="AbortError")toast("无法调用系统打开："+e.message+"；请尝试下载")}
+  };
   download.disabled=false;
   download.onclick=()=>{
    const a=document.createElement("a");a.href=previewObjectUrl;a.download=f.name||"attachment";document.body.appendChild(a);a.click();a.remove();
