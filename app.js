@@ -29,11 +29,11 @@ $("#paymentMetrics").innerHTML=[["付款总额",fmt(paidSum),"全部付款流水
 $("#paymentList").innerHTML=renderPayments(state.payments.slice().sort((a,b)=>b.date.localeCompare(a.date)),false);
 $("#categories").innerHTML=renderCategories();
 $("#categorySettings").innerHTML=state.categories.map(c=>'<div class="item"><div class="grow">'+safe(c.name)+'</div><button class="linkbtn" data-edit="category" data-id="'+c.id+'">编辑</button><button class="linkbtn" data-delete="category" data-id="'+c.id+'">删除</button></div>').join("");
-$("#fileList").innerHTML=state.files.length?state.files.slice().reverse().map(f=>'<div class="item"><div class="grow"><div class="name">📄 '+safe(f.name)+'</div><small>'+safe(f.kind||"其他")+' · '+safe(byItem(f.itemId)?.name||"未关联项目")+' · '+safe(f.date||"")+' · '+(f.remote?"已上传私库":"仅本机")+'</small></div><button class="linkbtn" data-open-file="'+f.id+'">打开</button><button class="linkbtn" data-delete="file" data-id="'+f.id+'">删除</button></div>').join(""):'<div class="empty"><strong>还没有上传文件</strong>点击“上传文件”保存报价、合同或发票。</div>';
+$("#fileList").innerHTML=state.files.length?state.files.slice().reverse().map(f=>'<div class="item"><div class="grow"><div class="name">📄 '+safe(f.name)+'</div><small>'+safe(f.kind||"其他")+' · '+safe(byItem(f.itemId)?.name||"未关联项目")+' · '+safe(f.date||"")+' · '+(f.remote?(f.storage==="r2"?"已上传 R2 私库":"已上传 GitHub 私库"):"仅本机 · 待同步")+'</small></div><button class="linkbtn" data-open-file="'+f.id+'">打开</button><button class="linkbtn" data-delete="file" data-id="'+f.id+'">删除</button></div>').join(""):'<div class="empty"><strong>还没有上传文件</strong>点击“上传文件”保存报价、合同或发票。</div>';
 $("#fileCount").textContent=state.files.length+" 份";
 $("#quoteList").innerHTML=state.quotes.length?state.quotes.map(q=>'<div class="item"><div class="grow"><div class="name">'+safe(byItem(q.itemId)?.name||"未关联项目")+' · '+safe(q.vendor||"未命名供应商")+'</div><small>'+safe(q.note||"")+'</small></div><strong class="price">'+fmt(q.amount)+'</strong><button class="linkbtn" data-edit="quote" data-id="'+q.id+'">编辑</button><button class="linkbtn" data-delete="quote" data-id="'+q.id+'">删除</button></div>').join(""):'<div class="empty">暂无供应商报价记录</div>';
 $("#limit").value=state.limit??"";$("#syncLabel").textContent=connected?"已连接私库":"本地数据";$("#syncLabel").className="status"+(connected?" online":"");
-$("#fileNotice").textContent=connected?"已连接私库。上传文件后可同步到 GitHub 私有仓库；请避免上传包含不必要敏感身份信息的原件。":"目前使用当前设备的浏览器本地储存。合同、文件只有这台设备能打开，连接 Worker 后才能同步到私库。";
+$("#fileNotice").textContent=connected?"已连接私密存储。7MB 以下文件同步到 GitHub 私库，较大文件自动上传到 Cloudflare R2；请检查同步状态。":"当前只保存在本设备。登录后会自动同步附件到 GitHub 私库或 Cloudflare R2。";
 }
 function renderPayments(arr,short){
  if(!arr.length) return '<div class="empty"><strong>还没有付款记录</strong>付款后再添加，当前已付款金额为 ¥0。</div>';
