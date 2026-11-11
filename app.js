@@ -15,13 +15,27 @@ const scheduleSync=()=>{clearTimeout(syncTimer);if(connected&&!conflict&&!initia
 const setRemoteSha=sha=>{remoteSha=sha;sha?localStorage.setItem("interior-remote-sha",sha):localStorage.removeItem("interior-remote-sha")};
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],persist=()=>{state.updated=new Date().toISOString();localStorage.setItem(KEY,JSON.stringify(state));setDirty();render()},toast=(s)=>{const d=document.createElement("div");d.className="toast";d.textContent=s;$("#toastRoot").append(d);setTimeout(()=>d.remove(),3800)};
 const validMoney=v=>v!==null&&v!==undefined&&v!==""&&Number.isFinite(Number(v))&&Number(v)>=0;
+const roundCents=n=>Math.round((n+Number.EPSILON)*100)/100;
+const roundQuote=(value,mode)=>mode==="floor"?Math.floor(value+1e-9):mode==="round"?Math.round(value):roundCents(value);
+const quoteAmount=i=>{
+ if(i.quoteEdited===true){
+  if(i.quoteRounding==="custom")return validMoney(i.quoteCustomTotal)?Number(i.quoteCustomTotal):null;
+  return validMoney(i.quote)?roundQuote(Number(i.quote)*Number(i.quantity||1),i.quoteRounding||"none"):null;
+ }
+ return validMoney(i.quoteTotal)?Number(i.quoteTotal):validMoney(i.quote)?roundCents(Number(i.quote)*Number(i.quantity||1)):null;
+};
 const amounts=i=>({
- budget:i.budget===null||i.budget===undefined?null:Math.max(0,Number(i.budget)||0)*Number(i.quantity||1),
- quote:validMoney(i.quoteTotal)?Number(i.quoteTotal):(i.quote===null||i.quote===undefined?null:Math.max(0,Number(i.quote)||0)*Number(i.quantity||1)),
- actual:i.actual===null||i.actual===undefined?null:Math.max(0,Number(i.actual)||0)*Number(i.quantity||1)
+ budget:validMoney(i.budget)?roundCents(Number(i.budget)*Number(i.quantity||1)):null,
+ quote:quoteAmount(i),
+ actual:validMoney(i.actual)?roundCents(Number(i.actual)*Number(i.quantity||1)):null
 });
-const quoteDifference=i=>validMoney(i.quoteTotal)&&validMoney(i.quote)&&Number(i.quantity)>0?Number(i.quoteTotal)-Number(i.quote)*Number(i.quantity):null;
-const priceDetail=i=>{const d=quoteDifference(i);return validMoney(i.quoteTotal)?'<div class="hint">商家行金额 '+fmt(i.quoteTotal)+(validMoney(i.quote)?' · 原单价 '+fmt(i.quote):'')+(d!==null&&Math.abs(d)>=0.005?' · 差额 '+(d>0?'+':'')+d.toFixed(2):'')+'</div>':''};
+const quoteDifference=i=>validMoney(i.quote)&&Number(i.quantity)>0&&validMoney(quoteAmount(i))?roundCents(quoteAmount(i)-Number(i.quote)*Number(i.quantity)):null;
+const priceDetail=i=>{
+ const q=amounts(i).quote,d=quoteDifference(i);
+ if(i.quoteEdited===true)return '<div class="hint">新报价 '+fmt(q)+(i.quoteRounding==="floor"?' · 直接抹零':i.quoteRounding==="round"?' · 四舍五入到元':i.quoteRounding==="custom"?' · 手动金额':' · 保留分角')+(d!==null&&Math.abs(d)>=.005?' · 取整/调整差额 '+(d>0?'+':'')+d.toFixed(2):'')+(validMoney(i.quoteTotal)?' · 原商家行报价 '+fmt(i.quoteTotal):'')+'</div>';
+ if(validMoney(i.quoteTotal))return '<div class="hint">商家原始行报价 '+fmt(i.quoteTotal)+(validMoney(i.quote)?' · 原单价 '+fmt(i.quote):'')+(d!==null&&Math.abs(d)>=.005?' · 差额 '+(d>0?'+':'')+d.toFixed(2):'')+'</div>';
+ return '';
+};
 const priceFor=i=>{const a=amounts(i);return a.actual??a.quote??a.budget??null};
 const itemName=i=>safe(i.name)+(Number(i.quantity)>1?" × "+Number(i.quantity):"");
 const byItem=id=>state.items.find(i=>i.id===id),categoryName=id=>state.categories.find(c=>c.id===id)?.name||"未分类";
@@ -59,7 +73,57 @@ const input=(name,label,value,type="text",other="")=>'<div class="formgroup"><la
 const select=(name,label,options,selected)=>'<div class="formgroup"><label>'+label+'</label><select class="field" name="'+name+'">'+opts(options,selected)+'</select></div>';
 const modal=(title,body,save,extra)=>{$("#modalRoot").innerHTML='<div class="modalbg"><div class="modal"><div class="modalhead"><h2>'+title+'</h2><button type="button" class="close" id="closeModal" aria-label="关闭">×</button></div><form id="editForm">'+body+'<div class="modalfoot"><button type="button" class="btn" id="cancelModal">取消</button><button type="submit" class="btn primary">'+(save||"保存")+'</button></div></form></div></div>';$("#closeModal").onclick=$("#cancelModal").onclick=closeModal;$(".modalbg").addEventListener("click",e=>{if(e.target.classList.contains("modalbg"))closeModal()});$("#editForm").onsubmit=e=>{e.preventDefault();extra(new FormData(e.currentTarget))}};
 const closeModal=()=>$("#modalRoot").innerHTML="";
-function edit(kind,id){if(kind==="item"){const old=id?byItem(id):null,i=old||{name:"",categoryId:state.categories[0]?.id||"",quantity:1,unit:"项",status:"pending",budget:null,quote:null,actual:null,brand:"",vendor:"",notes:""};modal(old?"编辑装修项目":"添加装修项目",'<div class="formgrid">'+input("name","项目名称",i.name,"text","required maxlength=120")+select("categoryId","分类",state.categories.map(c=>[c.id,c.name]),i.categoryId)+input("quantity","数量",i.quantity,"number","min=0.01 step=any required")+input("unit","单位",i.unit||"项")+input("budget","单价 · 计划预算（可空）",i.budget,"number","min=0 step=0.01")+input("quote","单价 · 当前报价（可空）",i.quote,"number","min=0 step=0.01")+input("quoteTotal","商家原始行金额（可空；优先计入预算）",i.quoteTotal??"","number","min=0 step=0.01")+input("actual","单价 · 最终成交（可空）",i.actual,"number","min=0 step=0.01")+select("status","状态",Object.entries(statusNames).map(([k,v])=>[k,v]),i.status)+input("brand","品牌/型号",i.brand)+input("vendor","供应商/装修公司",i.vendor)+'<div class="formgroup full"><label>备注</label><textarea class="field" name="notes">'+safe(i.notes)+'</textarea></div></div><p class="info">优先统计：成交价 → 当前报价 → 计划预算；三个价格都没填则显示“待报价”。如填入商家行金额，报价统计优先使用该金额；原始单价保留不变，并显示金额差额。最终成交价仍优先于报价。</p>',"保存",f=>{const obj={...i,id:old?.id||uid(),name:String(f.get("name")).trim(),categoryId:String(f.get("categoryId")),quantity:Number(f.get("quantity")),unit:String(f.get("unit")),budget:money(f.get("budget")),quote:money(f.get("quote")),quoteTotal:money(f.get("quoteTotal")),actual:money(f.get("actual")),status:String(f.get("status")),brand:String(f.get("brand")),vendor:String(f.get("vendor")),notes:String(f.get("notes"))};if(!obj.name||obj.quantity<=0)return toast("请填写名称与有效数量");if(old)Object.assign(old,obj);else state.items.push(obj);closeModal();persist();toast("项目已保存")});return}
+function edit(kind,id){if(kind==="item"){
+ const old=id?byItem(id):null;
+ const i=old||{name:"",categoryId:state.categories[0]?.id||"",quantity:1,unit:"项",status:"pending",budget:null,quote:null,actual:null,brand:"",vendor:"",notes:""};
+ const options=[["none","保留两位小数（正常计算）"],["floor","直接抹去小数部分"],["round","四舍五入到整数元"],["custom","手动指定最终行金额"]];
+ const source=validMoney(i.quoteTotal)?'<div class="formgroup full"><label>原商家行报价（保留作参考，不随改价覆盖）</label><div class="field" style="background:#f3f6f2;line-height:1.6;height:auto">'+fmt(i.quoteTotal)+'</div></div>':'';
+ const body='<div class="formgrid">'
+  +input("name","项目名称",i.name,"text","required maxlength=120")
+  +select("categoryId","分类",state.categories.map(c=>[c.id,c.name]),i.categoryId)
+  +input("quantity","数量",i.quantity,"number","min=0.01 step=any required")
+  +input("unit","单位",i.unit||"项")
+  +input("budget","单价 · 计划预算（可空）",i.budget,"number","min=0 step=0.01")
+  +input("quote","单价 · 当前报价（可空）",i.quote,"number","min=0 step=0.01")
+  +source
+  +select("quoteRounding","新报价金额处理方式",options,i.quoteRounding||"none")
+  +'<div class="formgroup" data-custom-box>'+input("quoteCustomTotal","手动最终行金额（¥）",i.quoteCustomTotal??"","number","min=0 step=0.01")+'</div>'
+  +'<div class="formgroup full quote-preview" id="itemQuotePreview" aria-live="polite"></div>'
+  +input("actual","单价 · 最终成交（可空）",i.actual,"number","min=0 step=0.01")
+  +select("status","状态",Object.entries(statusNames).map(([k,v])=>[k,v]),i.status)
+  +input("brand","品牌/型号",i.brand)
+  +input("vendor","供应商/装修公司",i.vendor)
+  +'<div class="formgroup full"><label>备注</label><textarea class="field" name="notes">'+safe(i.notes)+'</textarea></div></div>'
+  +'<p class="info">修改单价或数量后，新报价按所选规则计算。Excel 导入的商家原始行报价仍留作历史参考，不会锁住新的金额。优先统计：最终成交价 → 当前新报价 → 计划预算。</p>';
+ function collect(fd){
+  const next={...i,id:old?.id||uid(),name:String(fd.get("name")).trim(),categoryId:String(fd.get("categoryId")),quantity:Number(fd.get("quantity")),unit:String(fd.get("unit")),budget:money(fd.get("budget")),quote:money(fd.get("quote")),actual:money(fd.get("actual")),status:String(fd.get("status")),brand:String(fd.get("brand")),vendor:String(fd.get("vendor")),notes:String(fd.get("notes"))};
+  next.quoteRounding=String(fd.get("quoteRounding")||"none");
+  next.quoteCustomTotal=money(fd.get("quoteCustomTotal"));
+  const unitChanged=next.quantity!==Number(i.quantity)||next.quote!== (validMoney(i.quote)?Number(i.quote):null);
+  const roundChanged=next.quoteRounding!==(i.quoteRounding||"none");
+  const customChanged=next.quoteRounding==="custom"&&next.quoteCustomTotal!==(validMoney(i.quoteCustomTotal)?Number(i.quoteCustomTotal):null);
+  next.quoteEdited=i.quoteEdited===true||unitChanged||roundChanged||customChanged;
+  return next;
+ }
+ modal(old?"编辑装修项目":"添加装修项目",body,"保存",fd=>{
+  const obj=collect(fd);
+  if(!obj.name||!Number.isFinite(obj.quantity)||obj.quantity<=0)return toast("请填写名称与有效数量");
+  if(obj.quoteEdited&&obj.quoteRounding==="custom"&&!validMoney(obj.quoteCustomTotal))return toast("请填写有效的手动最终行金额");
+  if(old)Object.assign(old,obj);else state.items.push(obj);
+  closeModal();persist();toast("项目已保存");
+ });
+ const form=$("#editForm"),mode=form.elements.namedItem("quoteRounding"),customBox=form.querySelector("[data-custom-box]"),preview=form.querySelector("#itemQuotePreview");
+ const update=()=>{
+  const d=new FormData(form),obj=collect(d);
+  const q=Number(obj.quantity),unit=Number(obj.quote),hasQuote=validMoney(obj.quote)&&Number.isFinite(q)&&q>0;
+  const calculated=hasQuote?roundCents(q*unit):null,total=quoteAmount(obj),difference=calculated!==null&&total!==null?roundCents(total-calculated):null;
+  customBox.style.display=mode.value==="custom"?"":"none";
+  preview.innerHTML='<div class="quote-preview-grid"><span>数量 × 当前单价</span><strong>'+fmt(calculated)+'</strong><span>本次计入的报价金额</span><strong>'+fmt(total)+'</strong><span>抹零 / 调整差额</span><strong>'+(difference===null?'—':(difference>=0?'+':'')+fmt(difference))+'</strong></div>'
+   +(validMoney(i.quoteTotal)&&!obj.quoteEdited?'<small>目前沿用导入的原商家行报价；修改单价或取整方式后将使用新计算金额。</small>':validMoney(i.quoteTotal)?'<small>原商家行报价 '+fmt(i.quoteTotal)+' 已保留作参考，不用于覆盖新计算结果。</small>':'');
+ };
+ form.addEventListener("input",update);form.addEventListener("change",update);update();
+ return;
+}
 if(kind==="category"){const old=state.categories.find(c=>c.id===id);modal(old?"编辑分类":"添加分类",input("name","分类名称",old?.name||"","text","required maxlength=50"),"保存",f=>{const name=String(f.get("name")).trim();if(!name)return;if(old)old.name=name;else state.categories.push({id:uid(),name});closeModal();persist()});return}
 if(kind==="payment"){const old=state.payments.find(p=>p.id===id),p=old||{itemId:"",amount:"",date:today(),type:"定金",note:""};modal(old?"编辑付款":"添加付款",'<div class="formgrid">'+select("itemId","关联装修项目",state.items.map(i=>[i.id,i.name]),p.itemId||state.items[0]?.id)+input("amount","付款金额（人民币）",Math.abs(p.amount),"number","min=0.01 step=0.01 required")+input("date","付款日期",p.date,"date","required")+select("type","款项类型",[["定金","定金"],["进度款","进度款"],["尾款","尾款"],["全款","全款"],["退款","退款（负数计入）"]],p.type)+'<div class="formgroup full"><label>付款说明</label><textarea class="field" name="note">'+safe(p.note||"")+'</textarea></div></div>',"保存",f=>{const amount=Number(f.get("amount"));if(!(amount>0))return toast("金额需大于 0");const obj={id:old?.id||uid(),itemId:String(f.get("itemId")),amount:f.get("type")==="退款"?-amount:amount,date:String(f.get("date")),type:String(f.get("type")),note:String(f.get("note"))};if(old)Object.assign(old,obj);else state.payments.push(obj);closeModal();persist()});return}
 if(kind==="quote"){const old=state.quotes.find(q=>q.id===id),q=old||{itemId:"",vendor:"",amount:"",date:today(),note:""};modal(old?"编辑报价":"添加供应商报价",'<div class="formgrid">'+select("itemId","关联项目",state.items.map(i=>[i.id,i.name]),q.itemId||state.items[0]?.id)+input("vendor","供应商/装修公司",q.vendor,"text","required")+input("amount","报价总额（人民币）",q.amount,"number","min=0 step=0.01 required")+input("date","报价日期",q.date,"date")+'<div class="formgroup full"><label>备注（含安装、税费、保修等）</label><textarea class="field" name="note">'+safe(q.note||"")+'</textarea></div></div><p class="info">供应商报价单独记录，只有你手动更新项目“当前报价”后，才会进入预算总额，避免重复统计。</p>',"保存",f=>{const obj={id:old?.id||uid(),itemId:String(f.get("itemId")),vendor:String(f.get("vendor")),amount:Number(f.get("amount")),date:String(f.get("date")),note:String(f.get("note"))};if(old)Object.assign(old,obj);else state.quotes.push(obj);closeModal();persist()});return}
