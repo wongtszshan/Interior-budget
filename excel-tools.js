@@ -21,9 +21,14 @@ const toNumber=v=>{
  if(!raw||!/^-?\d+(?:\.\d+)?$/.test(raw))return null;
  const n=Number(raw);return Number.isFinite(n)?n:null;
 };
+function letter(i){let n=i+1,r="";while(n>0){n--;r=String.fromCharCode(65+n%26)+r;n=Math.floor(n/26)}return r}
 function colOptions(cols,value,allowEmpty=true){
- return (allowEmpty?'<option value="">不使用</option>':"")+cols.map((c,i)=>'<option value="'+i+'" '+(String(i)===String(value)?"selected":"")+'>'+esc(String.fromCharCode(65+i))+' · '+esc(c||"第"+(i+1)+"列")+'</option>').join("");
+ return (allowEmpty?'<option value="">不使用</option>':"")+cols.map((heading,i)=>{
+  const title=toText(heading);
+  return '<option value="'+i+'" '+(String(i)===String(value)?"selected":"")+'>'+letter(i)+' 列 · '+esc(title||"无表头")+'</option>';
+ }).join("");
 }
+
 const keys=[
  {key:"group",label:"空间 / 柜体",pattern:/^空间$|^区域$|房间|使用空间|柜体名称|位置|^分组$/},
  {key:"name",label:"项目名称",pattern:/项目名称|项目内容|工程项目|费用项目|材料名称|品名|名称|明细|描述|内容|产品|物品|货品|施工项目/},
@@ -49,26 +54,37 @@ function show({blob,file,mount,categories,existingNames,onImport}){
   if(!wb.SheetNames.length)throw Error("这个 Excel 文件没有工作表");
   let sheet=wb.SheetNames[0],header=0,mapping={},selected=new Set(),allRows=[],columns=[],mappedRows=[],mode="view",viewLimit=250,rawLimit=200,merges=[];
   const root=document.createElement("div");root.className="excel-root";mount.replaceChildren(root);
+  // Read cells by absolute Excel coordinates. sheet_to_json may offset a
+  // non-A1 worksheet range; that makes the visible column letters misleading.
+  function readCell(ws,r,c){
+   const cell=ws["!data"]?.[r]?.[c]||ws[XLSX.utils.encode_cell({r,c})];
+   if(!cell||cell.v===null||cell.v===undefined)return "";
+   return toText(cell.w!==undefined?cell.w:cell.v);
+  }
   function loadSheet(){
-   let worksheet=wb.Sheets[sheet];
-   allRows=XLSX.utils.sheet_to_json(worksheet,{header:1,defval:"",raw:false,blankrows:true})
-    .slice(0,10001).map(r=>(Array.isArray(r)?r:[]).slice(0,80).map(x=>toText(x)));
-   merges=worksheet["!merges"]||[];
-   const width=Math.min(80,Math.max(1,...allRows.map(r=>r.length)));
-   // Prefer the row with actual column headings over the document title.
-   header=0;let best=-1;
-   for(let i=0;i<Math.min(allRows.length,24);i++){
-    const text=allRows[i].join("|").replace(/\s/g,"");
-    let score=0;
-    if(/项目|名称|明细/.test(text))score+=3;
-    if(/面积|数量|工程量/.test(text))score+=2;
-    if(/单价/.test(text))score+=2;
-    if(/金额|总价|合价/.test(text))score+=2;
-    if(/空间|区域|柜体/.test(text))score++;
-    if(score>best){best=score;header=i}
+   const ws=wb.Sheets[sheet];
+   const bounds=XLSX.utils.decode_range(ws["!ref"]||"A1");
+   const height=Math.min(10001,bounds.e.r+1),width=Math.min(80,bounds.e.c+1);
+   allRows=Array.from({length:height},(_,r)=>Array.from({length:width},(_,c)=>readCell(ws,r,c)));
+   merges=ws["!merges"]||[];
+   const scoreRow=row=>{
+    const a=row.map(v=>toText(v).replace(/\s/g,""));
+    let hits=0;
+    if(a.some(x=>/^(项目|项目名称|工程项目|明细|品名|内容)$/.test(x)))hits+=4;
+    if(a.some(x=>/^(面积\/数量|数量|面积|工程量|用量)$/.test(x)))hits+=3;
+    if(a.some(x=>/^单价/.test(x)))hits+=3;
+    if(a.some(x=>/^(金额|合价|总价|合计金额)$/.test(x)))hits+=3;
+    if(a.some(x=>/^(空间|区域|柜体)$/.test(x)))hits+=2;
+    // Mixed title rows often mention words but aren't actual column labels.
+    return hits;
+   };
+   let bestScore=-1;header=0;
+   for(let r=0;r<Math.min(height,35);r++){
+    const score=scoreRow(allRows[r]);if(score>bestScore){bestScore=score;header=r}
    }
-   columns=Array.from({length:width},(_,i)=>allRows[header]?.[i]||"");
-   mapping=guessed(columns);selected=new Set();viewLimit=250;rawLimit=200;renderMode();
+   columns=Array.from({length:width},(_,c)=>allRows[header]?.[c]||"");
+   mapping=guessed(columns);
+   selected=new Set();viewLimit=250;rawLimit=200;renderMode();
   }
   function renderMode(){root.classList.toggle("excel-import-mode",mode==="import");if(mode==="view")renderViewer();else render()}
   function renderViewer(){
