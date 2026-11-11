@@ -91,7 +91,24 @@ async function openFile(id){
    const a=document.createElement("a");a.href=previewObjectUrl;a.download=f.name||"attachment";document.body.appendChild(a);a.click();a.remove();
   };
   body.replaceChildren();
-  if(excelMime.includes(mime)){const note=document.createElement("div");note.className="preview-message";note.textContent="Excel 文件已准备好。点击右上角「下载」，即可使用 Excel、WPS 或系统文件应用打开。表格内预览与报价明细解析将在后续版本提供。";body.appendChild(note)}else if(mime==="application/pdf"){
+  if(excelMime.includes(mime)){
+   if(!window.InteriorExcel)throw Error("Excel 功能脚本尚未加载，请刷新网页");
+   window.InteriorExcel.show({
+    blob,file:f,mount:body,
+    categories:state.categories.map(c=>({id:c.id,name:c.name})),
+    existingNames:state.items.map(i=>i.name),
+    onImport:items=>{
+     if(!items.length)return;
+     for(const item of items)state.items.push({
+      id:uid(),name:item.name,categoryId:item.categoryId,
+      quantity:item.quantity,unit:item.unit,budget:null,quote:item.quote,
+      actual:null,status:"quoted",brand:"",vendor:item.vendor,notes:item.notes
+     });
+     persist();closePreview();page("items");
+     toast("成功导入 "+items.length+" 条报价明细；已加入装修预算，稍后自动同步");
+    }
+   });
+  }else if(mime==="application/pdf"){
    const frame=document.createElement("iframe");
    frame.className="preview-document";frame.title=f.name;frame.src=previewObjectUrl;
    body.appendChild(frame);
