@@ -62,7 +62,7 @@ function openDB(){return dbPromise||(dbPromise=new Promise((resolve,reject)=>{co
 async function dbTask(type,id,val){const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction("docs",type==="get"?"readonly":"readwrite");const op=type==="put"?tx.objectStore("docs").put(val,id):type==="get"?tx.objectStore("docs").get(id):tx.objectStore("docs").delete(id);op.onsuccess=()=>res(op.result);op.onerror=()=>rej(op.error)})}
 const putLocalFile=(id,file)=>dbTask("put",id,file),getLocalFile=id=>dbTask("get",id),deleteLocalFile=id=>dbTask("delete",id);
 let previewObjectUrl=null;
-function closePreview(){document.querySelector("#filePreviewOverlay")?.remove();if(previewObjectUrl){URL.revokeObjectURL(previewObjectUrl);previewObjectUrl=null}}
+function closePreview(){document.querySelector("#filePreviewOverlay .pdf-viewer")?.pdfCleanup?.();document.querySelector("#filePreviewOverlay")?.remove();if(previewObjectUrl){URL.revokeObjectURL(previewObjectUrl);previewObjectUrl=null}}
 async function openFile(id){
  const f=state.files.find(x=>x.id===id);if(!f)return;
  closePreview();
@@ -109,10 +109,8 @@ async function openFile(id){
     }
    });
   }else if(mime==="application/pdf"){
-   const frame=document.createElement("iframe");
-   frame.className="preview-document";frame.title=f.name;frame.src=previewObjectUrl;
-   body.appendChild(frame);
-   const tip=document.createElement("div");tip.className="preview-tip";tip.textContent="如果此设备无法直接显示 PDF，请点击右上角「下载」后用系统文件应用打开。";body.appendChild(tip);
+   if(!window.InteriorPDF)throw Error("PDF 阅读器组件未加载，请刷新网页");
+   window.InteriorPDF.show({blob,mount:body,file:f});
   }else{
    const image=document.createElement("img");image.className="preview-image";image.alt=f.name;image.src=previewObjectUrl;body.appendChild(image);
   }
