@@ -88,7 +88,7 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    '<details class="excel-source"><summary>查看原始工作表（前 40 行，前 14 列）</summary><div class="excel-table-wrap"><table class="excel-table"><tbody>'+rawPreview+'</tbody></table></div></details><div class="excel-mapping">'+selectFields+'</div>'+
    '<div class="excel-import-options"><label>导入到预算分类<select class="field" id="excelCategory">'+cats+'</select></label><label>供应商 / 公司<input class="field" id="excelVendor" placeholder="可选，填报价方"></label></div>'+
    '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示 '+display.length+' 项</span></div>'+
-   '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>单价</th><th>总金额</th></tr></thead><tbody>'+rows.join("")+'</tbody></table></div>'+
+   '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>单价</th><th>总金额</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
    '<div class="excel-bottom"><button class="btn" id="excelSelectNone">取消选择</button><button class="btn primary" id="excelImport" type="button">确认导入选中的项目</button></div>'+
    '<p class="info">导入只新增独立的预算项目，不修改原 Excel、不覆盖已有项目，也不计入已付款。名称与现有项目或表内其他明细相同的行默认跳过；仅识别有金额的明细行。最多导入 1000 项。</p>';
    root.querySelector("#excelSheet").onchange=e=>{sheet=e.target.value;header=0;loadSheet()};
