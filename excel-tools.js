@@ -67,7 +67,7 @@ function show({blob,file,mount,categories,existingNames,onImport}){
     const total=toNumber(picked(row,"total"));
     const valid=qty>0&&unitPrice!==null&&unitPrice>=0||qty>0&&total!==null&&total>=0;
     const price=qty>0?(unitPrice!==null&&unitPrice>=0?unitPrice:total!==null&&total>=0?total/qty:null):null;
-    const duplicate=seen.has(name.toLowerCase());
+    const duplicate=seen.has(name.toLowerCase());seen.add(name.toLowerCase());
     rows.push({index:i,name,quantity:qty,unit:picked(row,"unit")||"项",unitPrice:price,total:total??(price!==null?price*qty:null),valid,duplicate});
    }
    return rows.slice(0,1000);
@@ -75,21 +75,22 @@ function show({blob,file,mount,categories,existingNames,onImport}){
   function render(){
    mappedRows=getRows();
    selected=new Set([...selected].filter(i=>mappedRows.some(r=>r.index===i&&r.valid&&!r.duplicate)));
-   if(!selected.size)for(const row of mappedRows)if(row.valid&&!row.duplicate)selected.add(row.index);
+   
    const cats=categories.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.name)+'</option>').join("");
    const headerOpts=allRows.slice(0,Math.min(allRows.length,12)).map((r,i)=>'<option value="'+i+'" '+(i===header?"selected":"")+'>'+(i+1)+' · '+esc(r.slice(0,3).join(" / ").slice(0,70))+'</option>').join("");
    const sheets=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?"selected":"")+'>'+esc(v)+'</option>').join("");
    const selectFields=keys.map(k=>'<label class="excel-map-field">'+esc(k.label)+'<select class="field" data-column="'+k.key+'">'+colOptions(columns,mapping[k.key],k.key!=="name")+'</select></label>').join("");
-   const display=mappedRows.slice(0,300);
+   const display=mappedRows.slice(0,1000);
+   const rawPreview=allRows.slice(0,40).map((r,i)=>"<tr><td>"+(i+1)+"</td>"+Array.from({length:Math.min(14,columns.length)},(_,j)=>"<td>"+esc(r[j]??"")+"</td>").join("")+"</tr>").join("");
    const rows=display.map(r=>'<tr class="'+(r.duplicate?"excel-duplicate":"")+'"><td><input type="checkbox" data-row="'+r.index+'" '+(selected.has(r.index)?"checked":"")+' '+(!r.valid||r.duplicate?"disabled":"")+'></td><td>'+(r.index+1)+'</td><td>'+esc(r.name)+(r.duplicate?' <span class="chip warn">名称重复</span>':!r.valid?' <span class="chip warn">缺少有效金额</span>':"")+'</td><td>'+esc(r.quantity)+'</td><td>'+esc(r.unit)+'</td><td>'+ (r.unitPrice===null?"—":"¥"+r.unitPrice.toFixed(2))+'</td><td>'+(r.total===null?"—":"¥"+r.total.toFixed(2))+'</td></tr>').join("");
    root.innerHTML='<div class="excel-controls"><label>工作表<select class="field" id="excelSheet">'+sheets+'</select></label><label>表头所在行<select class="field" id="excelHeader">'+headerOpts+'</select></label></div>'+
    '<div class="excel-notice">表格仅在当前浏览器解析，不会传给 Excel 解析服务。公式不会在此重新计算；请核对报价金额、合并单元格及最终合同报价。</div>'+
-   '<div class="excel-mapping">'+selectFields+'</div>'+
+   '<details class="excel-source"><summary>查看原始工作表（前 40 行，前 14 列）</summary><div class="excel-table-wrap"><table class="excel-table"><tbody>'+rawPreview+'</tbody></table></div></details><div class="excel-mapping">'+selectFields+'</div>'+
    '<div class="excel-import-options"><label>导入到预算分类<select class="field" id="excelCategory">'+cats+'</select></label><label>供应商 / 公司<input class="field" id="excelVendor" placeholder="可选，填报价方"></label></div>'+
-   '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示前 '+display.length+' 项</span></div>'+
+   '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示 '+display.length+' 项</span></div>'+
    '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>单价</th><th>总金额</th></tr></thead><tbody>'+rows.join("")+'</tbody></table></div>'+
    '<div class="excel-bottom"><button class="btn" id="excelSelectNone">取消选择</button><button class="btn primary" id="excelImport" type="button">确认导入选中的项目</button></div>'+
-   '<p class="info">导入只新增独立的预算项目，不修改原 Excel、不覆盖已有项目，也不计入已付款。名称与现有项目相同的行默认跳过；仅识别有金额的明细行。最多导入 1000 项。</p>';
+   '<p class="info">导入只新增独立的预算项目，不修改原 Excel、不覆盖已有项目，也不计入已付款。名称与现有项目或表内其他明细相同的行默认跳过；仅识别有金额的明细行。最多导入 1000 项。</p>';
    root.querySelector("#excelSheet").onchange=e=>{sheet=e.target.value;header=0;loadSheet()};
    root.querySelector("#excelHeader").onchange=e=>{header=Number(e.target.value);columns=Array.from({length:Math.max(1,...allRows.map(r=>r.length))},(_,i)=>allRows[header]?.[i]||"");mapping=guessed(columns);selected.clear();render()};
    root.querySelectorAll("[data-column]").forEach(el=>el.onchange=()=>{mapping[el.dataset.column]=el.value;selected.clear();render()});
