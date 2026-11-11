@@ -25,11 +25,12 @@ function colOptions(cols,value,allowEmpty=true){
  return (allowEmpty?'<option value="">不使用</option>':"")+cols.map((c,i)=>'<option value="'+i+'" '+(String(i)===String(value)?"selected":"")+'>'+esc(String.fromCharCode(65+i))+' · '+esc(c||"第"+(i+1)+"列")+'</option>').join("");
 }
 const keys=[
+ {key:"group",label:"空间 / 柜体",pattern:/^空间$|^区域$|房间|使用空间|柜体名称|位置|^分组$/},
  {key:"name",label:"项目名称",pattern:/项目名称|项目内容|工程项目|费用项目|材料名称|品名|名称|明细|描述|内容|产品|物品|货品|施工项目/},
- {key:"quantity",label:"数量",pattern:/数量|工程量|数量\/|数量（/},
+ {key:"quantity",label:"数量 / 面积",pattern:/数量|工程量|面积|用量|数量\/|数量（/},
  {key:"unit",label:"单位",pattern:/^单位$|计量单位|单位\/|单位（/},
  {key:"unitPrice",label:"单价",pattern:/单价|综合单价|报价单价|含税单价/},
- {key:"total",label:"合计金额",pattern:/合计金额|总价|金额|小计|合价|报价合计|总金额|费用合计/}
+ {key:"total",label:"行金额（不选分组小计）",pattern:/^金额$|^总价$|^合价$|合计金额|报价金额|行金额/}
 ];
 function guessed(cols){
  const used=new Set(),map={};
@@ -46,17 +47,30 @@ function show({blob,file,mount,categories,existingNames,onImport}){
   const bytes=await blob.arrayBuffer();
   const wb=XLSX.read(bytes,{type:"array",dense:true,cellFormula:false,cellHTML:false,bookVBA:false});
   if(!wb.SheetNames.length)throw Error("这个 Excel 文件没有工作表");
-  let sheet=wb.SheetNames[0],header=0,mapping={},selected=new Set(),allRows=[],columns=[],mappedRows=[],mode="view",viewLimit=250,rawLimit=200;
+  let sheet=wb.SheetNames[0],header=0,mapping={},selected=new Set(),allRows=[],columns=[],mappedRows=[],mode="view",viewLimit=250,rawLimit=200,merges=[];
   const root=document.createElement("div");root.className="excel-root";mount.replaceChildren(root);
   function loadSheet(){
    let worksheet=wb.Sheets[sheet];
-   allRows=XLSX.utils.sheet_to_json(worksheet,{header:1,defval:"",raw:false,blankrows:false})
-    .slice(0,10001).map(r=>r.slice(0,80).map(x=>toText(x)));
+   allRows=XLSX.utils.sheet_to_json(worksheet,{header:1,defval:"",raw:false,blankrows:true})
+    .slice(0,10001).map(r=>(Array.isArray(r)?r:[]).slice(0,80).map(x=>toText(x)));
+   merges=worksheet["!merges"]||[];
    const width=Math.min(80,Math.max(1,...allRows.map(r=>r.length)));
+   // Prefer the row with actual column headings over the document title.
+   header=0;let best=-1;
+   for(let i=0;i<Math.min(allRows.length,24);i++){
+    const text=allRows[i].join("|").replace(/\s/g,"");
+    let score=0;
+    if(/项目|名称|明细/.test(text))score+=3;
+    if(/面积|数量|工程量/.test(text))score+=2;
+    if(/单价/.test(text))score+=2;
+    if(/金额|总价|合价/.test(text))score+=2;
+    if(/空间|区域|柜体/.test(text))score++;
+    if(score>best){best=score;header=i}
+   }
    columns=Array.from({length:width},(_,i)=>allRows[header]?.[i]||"");
    mapping=guessed(columns);selected=new Set();viewLimit=250;rawLimit=200;renderMode();
   }
-  function renderMode(){if(mode==="view")renderViewer();else render()}
+  function renderMode(){root.classList.toggle("excel-import-mode",mode==="import");if(mode==="view")renderViewer();else render()}
   function renderViewer(){
    const sheetOptions=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?'selected':'')+'>'+esc(v)+'</option>').join("");
    const maxColumns=Math.min(60,Math.max(1,...allRows.map(r=>r.length)));
@@ -72,18 +86,29 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    const more=root.querySelector("#excelViewMore");if(more)more.onclick=()=>{const scroller=root.querySelector(".excel-sheet-scroller");const top=scroller.scrollTop,left=scroller.scrollLeft;viewLimit+=250;renderViewer();const next=root.querySelector(".excel-sheet-scroller");next.scrollTop=top;next.scrollLeft=left};
   }
   function picked(row,key){const i=mapping[key];return i===""||i===undefined?"":toText(row[Number(i)]);}
+  function groupAt(index){
+   const col=mapping.group;if(col===""||col===undefined)return "";
+   const c=Number(col),direct=toText(allRows[index]?.[c]);if(direct)return direct;
+   const merged=merges.find(m=>m.s.c<=c&&m.e.c>=c&&m.s.r<=index&&m.e.r>=index);
+   if(merged)return toText(allRows[merged.s.r]?.[merged.s.c]);
+   return "";
+  }
   function getRows(){
-   const rows=[];const seen=new Set(existingNames.map(s=>toText(s).toLowerCase()));
+   const rows=[],seen=new Set(existingNames.map(s=>toText(s).toLowerCase()));
    for(let i=header+1;i<allRows.length;i++){
-    const row=allRows[i],name=picked(row,"name");
-    if(!name)continue;
-    const qty=toNumber(picked(row,"quantity"))??1;
+    const row=allRows[i],baseName=picked(row,"name");
+    if(!baseName||/^(合计|总计|小计|总金额|备注|说明|序号|项目|项目名称|金额)$/i.test(baseName))continue;
+    const group=groupAt(i);
+    const fullName=group?group+"｜"+baseName:baseName;
+    const qtyRaw=toNumber(picked(row,"quantity")),qty=qtyRaw??1;
     const unitPrice=toNumber(picked(row,"unitPrice"));
     const total=toNumber(picked(row,"total"));
-    const valid=qty>0&&unitPrice!==null&&unitPrice>=0||qty>0&&total!==null&&total>=0;
-    const price=qty>0?(unitPrice!==null&&unitPrice>=0?unitPrice:total!==null&&total>=0?total/qty:null):null;
-    const duplicate=seen.has(name.toLowerCase());seen.add(name.toLowerCase());
-    rows.push({index:i,name,quantity:qty,unit:picked(row,"unit")||"项",unitPrice:price,total:total??(price!==null?price*qty:null),valid,duplicate});
+    // A zero amount is not an approved quote; never infer a positive price over it.
+    const valid=qty>0&&total!==0&&total!==null&&total>0 || qty>0&&total===null&&unitPrice!==null&&unitPrice>0;
+    const price=qty>0?(total!==null?total/qty:unitPrice):null;
+    const duplicate=seen.has(fullName.toLowerCase());
+    if(duplicate===false)seen.add(fullName.toLowerCase());
+    rows.push({index:i,name:fullName,baseName,group,quantity:qty,unit:picked(row,"unit")||(/面积|㎡|m²|m2/.test(columns[Number(mapping.quantity)]||"")?"㎡":"项"),unitPrice:price,total:total??(price!==null?price*qty:null),valid,duplicate});
    }
    return rows.slice(0,1000);
   }
@@ -99,7 +124,7 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    const rawPreview=allRows.slice(0,rawLimit).map((r,i)=>"<tr><td>"+(i+1)+"</td>"+Array.from({length:Math.min(14,columns.length)},(_,j)=>"<td>"+esc(r[j]??"")+"</td>").join("")+"</tr>").join("");
    const rows=display.map(r=>'<tr class="'+(r.duplicate?"excel-duplicate":"")+'"><td><input type="checkbox" data-row="'+r.index+'" '+(selected.has(r.index)?"checked":"")+' '+(!r.valid||r.duplicate?"disabled":"")+'></td><td>'+(r.index+1)+'</td><td>'+esc(r.name)+(r.duplicate?' <span class="chip warn">名称重复</span>':!r.valid?' <span class="chip warn">缺少有效金额</span>':"")+'</td><td>'+esc(r.quantity)+'</td><td>'+esc(r.unit)+'</td><td>'+ (r.unitPrice===null?"—":"¥"+r.unitPrice.toFixed(2))+'</td><td>'+(r.total===null?"—":"¥"+r.total.toFixed(2))+'</td></tr>').join("");
    root.innerHTML='<div class="excel-mode-toolbar"><button type="button" class="btn" id="excelBackView">← 返回表格预览</button><strong>选择报价明细导入预算</strong></div><div class="excel-controls"><label>工作表<select class="field" id="excelSheet">'+sheets+'</select></label><label>表头所在行<select class="field" id="excelHeader">'+headerOpts+'</select></label></div>'+
-   '<div class="excel-notice">表格仅在当前浏览器解析，不会传给 Excel 解析服务。公式不会在此重新计算；请核对报价金额、合并单元格及最终合同报价。</div>'+
+   '<div class="excel-notice">复杂报价推荐：空间/柜体=A，项目名称=B，面积/数量=E，单价=F，行金额=G；H 通常是分组小计，不要选作行金额。0 元行及小计行默认不允许导入。请核对每行。表格仅在浏览器解析。</div>'+
    '<details class="excel-source" open><summary>查看原始工作表（当前 '+Math.min(rawLimit,allRows.length)+' / '+allRows.length+' 行，前 14 列）</summary><div class="excel-table-wrap"><table class="excel-table"><tbody>'+rawPreview+'</tbody></table></div>'+(rawLimit<allRows.length?'<button type="button" class="btn" id="excelRawMore">继续显示后面 200 行</button>':'')+'</details><div class="excel-mapping">'+selectFields+'</div>'+
    '<div class="excel-import-options"><label>导入到预算分类<select class="field" id="excelCategory">'+cats+'</select></label><label>供应商 / 公司<input class="field" id="excelVendor" placeholder="可选，填报价方"></label></div>'+
    '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示 '+display.length+' 项</span></div>'+
@@ -120,7 +145,7 @@ function show({blob,file,mount,categories,existingNames,onImport}){
     const categoryId=root.querySelector("#excelCategory").value, vendor=root.querySelector("#excelVendor").value.trim();
     const total=chosen.reduce((a,r)=>a+(r.unitPrice*r.quantity),0);
     if(!confirm("确定新增 "+chosen.length+" 个预算项目，合计约 ¥"+total.toLocaleString("zh-CN",{maximumFractionDigits:2})+"？\n原文件和已有项目不会修改。"))return;
-    onImport(chosen.map(r=>({name:r.name,quantity:r.quantity,unit:r.unit,quote:Math.round(r.unitPrice*10000)/10000,categoryId,vendor,notes:"来源："+file.name+" / "+sheet+" / 第 "+(r.index+1)+" 行"})));
+    onImport(chosen.map(r=>({name:r.name,quantity:r.quantity,unit:r.unit,quote:Math.round(r.unitPrice*10000)/10000,categoryId,vendor,notes:"来源："+file.name+" / "+sheet+" / 第 "+(r.index+1)+" 行"+(r.group?"；空间："+r.group:"")})));
    };
   }
   loadSheet();
