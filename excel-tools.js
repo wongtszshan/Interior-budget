@@ -69,7 +69,7 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    (maxRows<allRows.length?'<button type="button" class="btn" id="excelViewMore">继续显示后面 250 行（剩余 '+(allRows.length-maxRows)+' 行）</button>':'');
    root.querySelector("#excelViewSheet").onchange=e=>{sheet=e.target.value;header=0;loadSheet()};
    root.querySelector("#excelSwitchImport").onclick=()=>{mode="import";renderMode()};
-   const more=root.querySelector("#excelViewMore");if(more)more.onclick=()=>{viewLimit+=250;renderViewer()};
+   const more=root.querySelector("#excelViewMore");if(more)more.onclick=()=>{const scroller=root.querySelector(".excel-sheet-scroller");const top=scroller.scrollTop,left=scroller.scrollLeft;viewLimit+=250;renderViewer();const next=root.querySelector(".excel-sheet-scroller");next.scrollTop=top;next.scrollLeft=left};
   }
   function picked(row,key){const i=mapping[key];return i===""||i===undefined?"":toText(row[Number(i)]);}
   function getRows(){
