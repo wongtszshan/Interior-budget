@@ -14,7 +14,7 @@ const github=async(env,path,method="GET",data)=>{const repo=env.GITHUB_REPO||REP
 const SESSION_DAYS=30, SESSION_MS=SESSION_DAYS*24*60*60*1000;
 const b64u=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
 const unb64u=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(s.length/4)*4,"=")),c=>c.charCodeAt(0));
-const sessionKey=async env=>crypto.subtle.importKey("raw",new TextEncoder().encode(env.SESSION_SECRET),"HMAC",{hash:"SHA-256"},false,["sign","verify"]);
+const sessionKey=async env=>crypto.subtle.importKey("raw",new TextEncoder().encode(env.SESSION_SECRET),{name:"HMAC",hash:"SHA-256"},false,["sign","verify"]);
 const createSession=async env=>{const payload={v:1,iat:Date.now(),exp:Date.now()+SESSION_MS,jti:crypto.randomUUID()};const str=b64u(new TextEncoder().encode(JSON.stringify(payload)));const sig=b64u(new Uint8Array(await crypto.subtle.sign("HMAC",await sessionKey(env),new TextEncoder().encode(str))));return {token:str+"."+sig,expiresAt:payload.exp}};
 const verifySession=async(env,token)=>{if(!token||token.length>1500)return false;const parts=token.split(".");if(parts.length!==2)return false;try{const payload=JSON.parse(new TextDecoder().decode(unb64u(parts[0])));if(payload.v!==1||!Number.isFinite(payload.exp)||payload.exp<=Date.now()||payload.exp>Date.now()+SESSION_MS+60000)return false;return await crypto.subtle.verify("HMAC",await sessionKey(env),unb64u(parts[1]),new TextEncoder().encode(parts[0]))}catch{return false}};
 const secureEqual=(a,b)=>{const x=new TextEncoder().encode(a),y=new TextEncoder().encode(b);let diff=x.length^y.length;for(let i=0;i<Math.max(x.length,y.length);i++)diff|=(x[i]||0)^(y[i]||0);return diff===0};
