@@ -16,7 +16,7 @@ function getLibrary(){
 }
 const clamp=(n,lo,hi)=>Math.max(lo,Math.min(hi,n));
 function show({blob,mount,file}){
- let closed=false,pdf=null,observer=null,zoom=1,generation=0;
+ let closed=false,pdf=null,observer=null,zoom=1,generation=0,track=null,trackWidth=0;
  const tasks=new Map();
  mount.replaceChildren();
  const root=document.createElement("div");root.className="pdf-viewer";
@@ -34,7 +34,7 @@ function show({blob,mount,file}){
  root.pdfCleanup=close;
  async function draw(n,round){
   if(!isActive()||round!==generation||tasks.has(n))return;
-  const holder=container.querySelector('[data-pdf-page="'+n+'"]');if(!holder||holder.dataset.drawn===String(round))return;
+  const holder=track?.querySelector('[data-pdf-page="'+n+'"]');if(!holder||holder.dataset.drawn===String(round))return;
   holder.dataset.drawn=String(round);
   try{
    const page=await pdf.getPage(n);if(!isActive()||round!==generation)return;
@@ -44,12 +44,16 @@ function show({blob,mount,file}){
    const canvas=document.createElement("canvas");canvas.className="pdf-page-canvas";
    canvas.width=Math.ceil(viewport.width*dpr);canvas.height=Math.ceil(viewport.height*dpr);
    canvas.style.width=viewport.width+"px";canvas.style.height=viewport.height+"px";
-   // The page itself must expand the scrollable content width at high zoom.
-   // Otherwise flex centering clips the left half beyond scrollLeft=0 on iOS.
-   holder.style.width=Math.ceil(viewport.width)+"px";
-   holder.style.minWidth="100%";
-   holder.style.marginLeft="0";
-   holder.style.marginRight="0";
+   // An explicit left-anchored track makes both zoomed edges reachable.
+   if(viewport.width>trackWidth&&track){
+    trackWidth=Math.ceil(viewport.width);
+    track.style.width=trackWidth+"px";
+   }
+   holder.style.width="100%";
+   holder.style.minWidth="0";
+   holder.style.margin="0";
+   canvas.style.marginLeft=viewport.width<trackWidth?"auto":"0";
+   canvas.style.marginRight=viewport.width<trackWidth?"auto":"0";
    const context=canvas.getContext("2d",{alpha:false});if(!context)throw Error("Canvas unavailable");
    holder.replaceChildren(canvas);
    const task=page.render({canvasContext:context,viewport,transform:dpr!==1?[dpr,0,0,dpr,0,0]:null});
@@ -61,7 +65,13 @@ function show({blob,mount,file}){
  function refresh(){
   if(!pdf||!isActive())return;
   generation++;stopTasks();observer?.disconnect();
-  const round=generation;container.replaceChildren();
+  const round=generation;
+  container.replaceChildren();
+  track=document.createElement("div");
+  track.className="pdf-pages-track";
+  trackWidth=Math.max(1,container.clientWidth);
+  track.style.width=trackWidth+"px";
+  container.appendChild(track);
   counter.textContent="共 "+pdf.numPages+" 页 · 上下滑动";currentPage=1;currentLabel.textContent="1 / "+pdf.numPages;
   zoomLabel.textContent=Math.round(zoom*100)+"%";
   observer=new IntersectionObserver(entries=>{
@@ -70,9 +80,18 @@ function show({blob,mount,file}){
   for(let n=1;n<=pdf.numPages;n++){
    const holder=document.createElement("div");holder.className="pdf-page-holder";holder.dataset.pdfPage=n;
    const label=document.createElement("div");label.className="pdf-page-number";label.textContent="第 "+n+" / "+pdf.numPages+" 页";
-   holder.appendChild(label);container.appendChild(holder);observer.observe(holder);
+   holder.appendChild(label);track.appendChild(holder);observer.observe(holder);
   }
-  for(const n of [1,2,3])if(n<=pdf.numPages)draw(n,round);
+  // On zoom, start centered, but the left edge remains at scrollLeft=0.
+  pdf.getPage(1).then(page=>{
+   if(round!==generation||!isActive()||!track)return;
+   const base=page.getViewport({scale:1});
+   const fit=Math.max(180,container.clientWidth-28)/base.width;
+   trackWidth=Math.max(container.clientWidth,Math.ceil(base.width*clamp(fit,.1,5)*zoom));
+   track.style.width=trackWidth+"px";
+   container.scrollLeft=Math.max(0,(trackWidth-container.clientWidth)/2);
+   for(const n of [1,2,3])if(n<=pdf.numPages)draw(n,round);
+  }).catch(()=>{if(round===generation)draw(1,round)});
  }
  root.querySelectorAll("[data-zoom]").forEach(b=>b.onclick=()=>{const next=clamp(Math.round((zoom+Number(b.dataset.zoom)*.2)*10)/10,.6,3);if(next!==zoom){zoom=next;refresh()}});
  root.querySelector("[data-fit]").onclick=()=>{zoom=1;refresh()};
