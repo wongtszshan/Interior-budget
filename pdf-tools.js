@@ -44,6 +44,12 @@ function show({blob,mount,file}){
    const canvas=document.createElement("canvas");canvas.className="pdf-page-canvas";
    canvas.width=Math.ceil(viewport.width*dpr);canvas.height=Math.ceil(viewport.height*dpr);
    canvas.style.width=viewport.width+"px";canvas.style.height=viewport.height+"px";
+   // The page itself must expand the scrollable content width at high zoom.
+   // Otherwise flex centering clips the left half beyond scrollLeft=0 on iOS.
+   holder.style.width=Math.ceil(viewport.width)+"px";
+   holder.style.minWidth="100%";
+   holder.style.marginLeft="0";
+   holder.style.marginRight="0";
    const context=canvas.getContext("2d",{alpha:false});if(!context)throw Error("Canvas unavailable");
    holder.replaceChildren(canvas);
    const task=page.render({canvasContext:context,viewport,transform:dpr!==1?[dpr,0,0,dpr,0,0]:null});
