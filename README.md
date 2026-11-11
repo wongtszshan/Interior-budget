@@ -87,3 +87,8 @@
 - 所有新上传附件（PDF、Excel、图片）统一保存在私有 Cloudflare R2 存储桶 `interior-budget-private-files`。
 - GitHub 私库 `data/budget.json` 只保存预算记录和文件索引，旧 `storage: github` 附件仍有兼容读取接口。
 - 文件通过 Worker 身份验证传输，最大 80MiB，不对外公开 R2 存储桶。用户授权删除的两份旧 PDF 会同时从 `documents/` 与预算文件索引中清除；请先确保留有原文件用于重新上传。
+
+## v1.6.2 — 连续滚动 PDF 阅读器
+- 使用 Mozilla PDF.js 在浏览器本地解析 PDF，取代在部分手机上只能看到第一页的 iframe。
+- 支持多页纵向滚动、放大缩小、适应宽度；使用可见区域按需渲染，保留下载原文件功能。
+- PDF.js 3.11.174 CDN 初次使用需联网；PDF 内容本身不传给第三方 PDF 解析服务。
