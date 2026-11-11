@@ -6,8 +6,14 @@ const makeSeed=()=>({schema:1,limit:null,categories:categoriesSeed.map(name=>({i
 const seed=makeSeed();seed.items=projectsSeed.map(([name,cat,price,status,quantity=1])=>({id:uid(),name,categoryId:seed.categories[cat].id,quantity,unit:"项",budget:null,quote:price,actual:null,status,brand:"",vendor:"",notes:""}));
 let state;try{state=JSON.parse(localStorage.getItem(KEY))}catch{}if(!state||!Array.isArray(state.items))state=seed;
 for(const k of ["categories","items","quotes","payments","files"])if(!Array.isArray(state[k]))state[k]=[];
-let remoteSha=null,connected=false,active="overview",openCats=new Set(),search="",filterStatus="",dbPromise=null;
-const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],persist=()=>{state.updated=new Date().toISOString();localStorage.setItem(KEY,JSON.stringify(state));render()},toast=(s)=>{const d=document.createElement("div");d.className="toast";d.textContent=s;$("#toastRoot").append(d);setTimeout(()=>d.remove(),3800)};
+let remoteSha=localStorage.getItem("interior-remote-sha")||null,connected=false,active="overview",openCats=new Set(),search="",filterStatus="",dbPromise=null;
+let dirty=localStorage.getItem("interior-dirty")==="1",syncTimer=null,syncBusy=false,initializing=false,conflict=false;
+const setSyncStatus=message=>{const e=document.querySelector("#syncInfo");if(e)e.textContent=message};
+const setDirty=()=>{dirty=true;localStorage.setItem("interior-dirty","1");setSyncStatus("存在未同步的本地更改");scheduleSync()};
+const clearDirty=()=>{dirty=false;localStorage.removeItem("interior-dirty")};
+const scheduleSync=()=>{clearTimeout(syncTimer);if(connected&&!conflict&&!initializing)syncTimer=setTimeout(()=>push(true),1800)};
+const setRemoteSha=sha=>{remoteSha=sha;sha?localStorage.setItem("interior-remote-sha",sha):localStorage.removeItem("interior-remote-sha")};
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)],persist=()=>{state.updated=new Date().toISOString();localStorage.setItem(KEY,JSON.stringify(state));setDirty();render()},toast=(s)=>{const d=document.createElement("div");d.className="toast";d.textContent=s;$("#toastRoot").append(d);setTimeout(()=>d.remove(),3800)};
 const amounts=i=>({budget:i.budget===null?null:Math.max(0,Number(i.budget)||0)*Number(i.quantity||1),quote:i.quote===null?null:Math.max(0,Number(i.quote)||0)*Number(i.quantity||1),actual:i.actual===null?null:Math.max(0,Number(i.actual)||0)*Number(i.quantity||1)});
 const priceFor=i=>{const a=amounts(i);return a.actual??a.quote??a.budget??null};
 const itemName=i=>safe(i.name)+(Number(i.quantity)>1?" × "+Number(i.quantity):"");
@@ -55,17 +61,95 @@ function del(kind,id){const names={item:"项目",category:"分类",payment:"付�
 function openDB(){return dbPromise||(dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open(LOCAL_FILES,1);r.onupgradeneeded=()=>r.result.createObjectStore("docs");r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)}))}
 async function dbTask(type,id,val){const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction("docs",type==="get"?"readonly":"readwrite");const op=type==="put"?tx.objectStore("docs").put(val,id):type==="get"?tx.objectStore("docs").get(id):tx.objectStore("docs").delete(id);op.onsuccess=()=>res(op.result);op.onerror=()=>rej(op.error)})}
 const putLocalFile=(id,file)=>dbTask("put",id,file),getLocalFile=id=>dbTask("get",id),deleteLocalFile=id=>dbTask("delete",id);
-async function openFile(id){const f=state.files.find(x=>x.id===id);if(!f)return;try{let blob=await getLocalFile(id);if(!blob&&f.remote){if(!connected)throw Error("此文件存放在私库，请先连接同步服务");const response=await api("/api/file/"+encodeURIComponent(id),{raw:true});blob=await response.blob()}if(!blob)throw Error("此设备没有文件本体，请连接云端同步");const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener");setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(e){toast(e.message)}}
-const apiConfig=()=>({url:localStorage.getItem("interior-api-url")||"",pw:sessionStorage.getItem("interior-api-password")||""});
-async function api(path,options={}){const {url,pw}=apiConfig();if(!url||!pw)throw Error("请先填写 Worker 地址和口令");let response;try{response=await fetch(url.replace(/\/+$/,"")+path,{method:options.method||"GET",headers:{"Authorization":"Bearer "+pw,...(options.body?{"Content-Type":"application/json"}:{})},body:options.body?JSON.stringify(options.body):undefined,cache:"no-store"})}catch{throw Error("无法连接 Worker：请检查地址、CORS 或网络连接")}if(!response.ok){const err=await response.text();throw Error("同步服务返回 "+response.status+"："+err.slice(0,130))}return options.raw?response:response.json()}
-async function connect(){const url=$("#apiUrl").value.trim().replace(/\/+$/,"");if(!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(url))return toast("请填写 https 开头的 Worker 地址");const pw=$("#apiPassword").value;if(!pw)return toast("请填写 Worker 访问口令");localStorage.setItem("interior-api-url",url);sessionStorage.setItem("interior-api-password",pw);try{await api("/api/health");connected=true;$("#syncInfo").textContent="已连接，可以手动从私库读取或同步。首次上传前请确认私库已有备份。";render();toast("连接成功")}catch(e){connected=false;toast(e.message)}}
-async function pull(){try{const r=await api("/api/data");if(!r.data){toast("私库尚无数据，请先同步本地清单");return}if(!Array.isArray(r.data.items)||!Array.isArray(r.data.categories))throw Error("云端数据格式错误");if(!confirm("从私库读取将覆盖当前设备的预算明细、付款和文件索引。确定继续？"))return;state=r.data;remoteSha=r.sha;connected=true;persist();toast("已从私人仓库读取")}catch(e){toast(e.message)}}
+async function openFile(id){const f=state.files.find(x=>x.id===id);if(!f)return;try{let blob=await getLocalFile(id);if(!blob&&f.remote){if(!connected)throw Error("此文件存放在私库，请先授权设备");const response=await api("/api/file/"+encodeURIComponent(id),{raw:true});blob=await response.blob()}if(!blob)throw Error("此设备没有文件本体，请连接云端同步");const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener");setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(e){toast(e.message)}}
+
+const DEFAULT_URL="https://interior-budget-api.wangtszshan.workers.dev";
+const apiConfig=()=>({url:localStorage.getItem("interior-api-url")||DEFAULT_URL,token:localStorage.getItem("interior-session-token")||""});
+async function api(path,options={}){
+ const {url,token}=apiConfig();if(!url)throw Error("请填写 Worker 地址");
+ let response;
+ try{response=await fetch(url.replace(/\/+$/,"")+path,{method:options.method||"GET",headers:{...(token?{"Authorization":"Bearer "+token}:{}),...(options.body?{"Content-Type":"application/json"}:{})},body:options.body?JSON.stringify(options.body):undefined,cache:"no-store"})}
+ catch{throw Error("无法连接 Worker，请检查网络连接")}
+ if(!response.ok){if(response.status===401){connected=false;setSyncStatus("设备授权失效，请重新验证");}
+ const body=await response.text();let msg=body;try{msg=JSON.parse(body).error||body}catch{}
+ const err=new Error("HTTP "+response.status+"："+msg.slice(0,130));err.status=response.status;throw err}
+ return options.raw?response:response.json()
+}
+async function connect(){
+ const url=$("#apiUrl").value.trim().replace(/\/+$/,"");
+ if(!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(url))return toast("请填写有效的 https Worker 地址");
+ const pw=$("#apiPassword").value;if(!pw)return toast("请输入 APP_PASSWORD");
+ localStorage.setItem("interior-api-url",url);
+ try{
+  const response=await fetch(url+"/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw}),cache:"no-store"});
+  const result=await response.json();if(!response.ok||!result.token)throw Error(result.error||"登录失败");
+  localStorage.setItem("interior-session-token",result.token);
+  localStorage.setItem("interior-session-expiry",String(result.expiresAt));
+  $("#apiPassword").value="";
+  connected=true;render();toast("本设备已授权，30 天内免登录");
+  await refreshFromCloud(true);
+ }catch(e){connected=false;setSyncStatus("授权失败："+e.message);toast(e.message)}
+}
+async function refreshFromCloud(first=false){
+ if(!connected||syncBusy)return;
+ try{
+  const r=await api("/api/data");
+  if(!r.data){setRemoteSha(null);if(dirty)scheduleSync();return}
+  if(!Array.isArray(r.data.items)||!Array.isArray(r.data.categories))throw Error("云端预算格式无效");
+  if(dirty){
+   if(remoteSha&&r.sha!==remoteSha){conflict=true;setSyncStatus("发现其他设备的更新：已暂停自动同步，请备份本地数据后处理冲突");toast("检测到版本冲突，本地修改已保留");}
+   else scheduleSync();
+   return;
+  }
+  state=r.data;setRemoteSha(r.sha);localStorage.setItem(KEY,JSON.stringify(state));render();
+  setSyncStatus("已从私库同步："+new Date().toLocaleString("zh-CN"));
+  if(first)toast("私人预算已自动载入");
+ }catch(e){setSyncStatus("读取失败："+e.message)}
+}
+async function pull(){
+ if(dirty&&!confirm("当前设备有尚未同步的修改。确认覆盖本地版本？建议先导出 JSON 备份。"))return;
+ if(dirty){clearDirty();conflict=false;}
+ await refreshFromCloud(true)
+}
 const fileToBase64=f=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(",")[1]);r.onerror=()=>reject(Error("读取文件失败"));r.readAsDataURL(f)});
-async function push(){try{await api("/api/health");connected=true;const snap=await api("/api/data");if(remoteSha&&snap.sha!==remoteSha)throw Error("云端版本已变化，请先处理冲突，不允许直接覆盖");if(!remoteSha&&snap.data){if(!confirm("私库已有数据。现在同步本地内容会覆盖它。建议先从私库读取并检查。确定继续？"))return}
-for(const f of state.files.filter(f=>!f.remote)){const blob=await getLocalFile(f.id);if(!blob)throw Error("附件 "+f.name+" 只剩索引、找不到本地文件，无法同步");const content=await fileToBase64(blob);await api("/api/file",{method:"POST",body:{id:f.id,name:f.name,mime:f.mime,base64:content}});f.remote=true;persist()}
-const res=await api("/api/data",{method:"PUT",body:{data:state,sha:snap.sha??null}});remoteSha=res.sha;persist();$("#syncInfo").textContent="上次同步："+new Date().toLocaleString("zh-CN");toast("同步已完成")}catch(e){toast("同步未完成："+e.message)}}
+async function push(automatic=false){
+ if(syncBusy||!connected||conflict||initializing||!dirty)return;
+ syncBusy=true;clearTimeout(syncTimer);setSyncStatus("正在同步…");
+ try{
+  const snap=await api("/api/data");
+  if((snap.sha||null)!==(remoteSha||null)){conflict=true;setSyncStatus("其他设备修改了预算，已停止自动覆盖。请导出本地 JSON 备份，再决定如何合并。");toast("跨设备版本冲突，未覆盖云端数据");return;}
+  for(const f of state.files.filter(f=>!f.remote)){
+   const blob=await getLocalFile(f.id);if(!blob)throw Error("找不到本地附件 "+f.name);
+   const content=await fileToBase64(blob);
+   await api("/api/file",{method:"POST",body:{id:f.id,name:f.name,mime:f.mime,base64:content}});
+   f.remote=true;
+   localStorage.setItem(KEY,JSON.stringify(state));
+  }
+  const data=structuredClone(state);
+  const res=await api("/api/data",{method:"PUT",body:{data,sha:remoteSha}});
+  setRemoteSha(res.sha);
+  if(JSON.stringify(state)===JSON.stringify(data)){clearDirty()}else scheduleSync();
+  localStorage.setItem(KEY,JSON.stringify(state));
+  setSyncStatus("已自动同步："+new Date().toLocaleString("zh-CN"));
+  if(!automatic)toast("同步完成");
+ }catch(e){
+  if(e.status===409){conflict=true;setSyncStatus("云端版本变化，已暂停自动同步。请先备份本地修改。")}
+  else setSyncStatus("同步未完成，本地修改已保留："+e.message);
+  if(!automatic)toast(e.message);
+ }finally{syncBusy=false}
+}
+async function initSession(){
+ const {token}=apiConfig(),expiry=Number(localStorage.getItem("interior-session-expiry")||0);
+ $("#apiUrl").value=apiConfig().url;
+ if(!token||expiry<=Date.now()){setSyncStatus("首次连接请验证身份。已授权设备到期后需再次输入口令。");return}
+ initializing=true;
+ try{await api("/api/session");connected=true;render();}
+ catch(e){localStorage.removeItem("interior-session-token");localStorage.removeItem("interior-session-expiry");connected=false;setSyncStatus("授权已失效，请重新验证");initializing=false;return}
+ initializing=false;await refreshFromCloud();
+ if(dirty&&!conflict)scheduleSync();
+}
 function download(name,content,type){const u=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 function wire(){document.addEventListener("click",e=>{const t=e.target.closest("[data-page],[data-goto],[data-add],[data-edit],[data-delete],[data-toggle],[data-open-file]");if(!t)return;if(t.dataset.page||t.dataset.goto)return page(t.dataset.page||t.dataset.goto);if(t.dataset.add)return edit(t.dataset.add);if(t.dataset.edit)return edit(t.dataset.edit,t.dataset.id);if(t.dataset.delete)return del(t.dataset.delete,t.dataset.id);if(t.dataset.toggle){openCats.has(t.dataset.toggle)?openCats.delete(t.dataset.toggle):openCats.add(t.dataset.toggle);return render()}if(t.dataset.openFile)return openFile(t.dataset.openFile)});
-$("#search").oninput=e=>{search=e.target.value;render()};$("#filterStatus").onchange=e=>{filterStatus=e.target.value;render()};$("#saveLimit").onclick=()=>{let v=$("#limit").value;state.limit=v===""?null:Math.max(0,Number(v));persist();toast("预算上限已保存")};$("#connect").onclick=connect;$("#pull").onclick=pull;$("#push").onclick=push;$("#export").onclick=()=>download("装修预算备份-"+today()+".json",JSON.stringify(state,null,2),"application/json");$("#csv").onclick=()=>{const rows=[["分类","项目","数量","单位","计划单价","报价单价","成交单价","当前预计合计","状态","供应商","备注"],...state.items.map(i=>[categoryName(i.categoryId),i.name,i.quantity,i.unit,i.budget??"",i.quote??"",i.actual??"",priceFor(i)??"",statusNames[i.status],i.vendor,i.notes])];download("装修预算明细-"+today()+".csv","\ufeff"+rows.map(r=>r.map(x=>'"'+String(x??"").replace(/"/g,'""')+'"').join(",")).join("\r\n"),"text/csv;charset=utf-8")};$("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!Array.isArray(d.items)||!Array.isArray(d.categories)||!Array.isArray(d.payments))throw Error("数据格式不正确");if(!confirm("导入将覆盖当前预算数据（不包含文件二进制），确定继续？"))return;state=d;remoteSha=null;persist();toast("预算备份已导入")}catch(err){toast(err.message)}e.target.value=""};$("#apiUrl").value=apiConfig().url;$("#apiPassword").value=apiConfig().pw;window.addEventListener("storage",e=>{if(e.key===KEY){try{state=JSON.parse(e.newValue);render()}catch{}}});if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});}
-openCats=new Set(state.categories.map(c=>c.id));wire();render();
+$("#search").oninput=e=>{search=e.target.value;render()};$("#filterStatus").onchange=e=>{filterStatus=e.target.value;render()};$("#saveLimit").onclick=()=>{let v=$("#limit").value;state.limit=v===""?null:Math.max(0,Number(v));persist();toast("预算上限已保存")};$("#connect").onclick=connect;$("#pull").onclick=pull;$("#push").onclick=()=>push(false);$("#export").onclick=()=>download("装修预算备份-"+today()+".json",JSON.stringify(state,null,2),"application/json");$("#csv").onclick=()=>{const rows=[["分类","项目","数量","单位","计划单价","报价单价","成交单价","当前预计合计","状态","供应商","备注"],...state.items.map(i=>[categoryName(i.categoryId),i.name,i.quantity,i.unit,i.budget??"",i.quote??"",i.actual??"",priceFor(i)??"",statusNames[i.status],i.vendor,i.notes])];download("装修预算明细-"+today()+".csv","\ufeff"+rows.map(r=>r.map(x=>'"'+String(x??"").replace(/"/g,'""')+'"').join(",")).join("\r\n"),"text/csv;charset=utf-8")};$("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!Array.isArray(d.items)||!Array.isArray(d.categories)||!Array.isArray(d.payments))throw Error("数据格式不正确");if(!confirm("导入将覆盖当前预算数据（不包含文件二进制），确定继续？"))return;state=d;setRemoteSha(null);persist();toast("预算备份已导入，已暂停自动覆盖原有云端数据");conflict=true}catch(err){toast(err.message)}e.target.value=""};$("#apiUrl").value=apiConfig().url;$("#apiPassword").value="";window.addEventListener("storage",e=>{if(e.key===KEY){try{state=JSON.parse(e.newValue);render()}catch{}}});if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});}
+openCats=new Set(state.categories.map(c=>c.id));wire();render();initSession();document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&connected){if(dirty)scheduleSync();else refreshFromCloud()}});
 })();
