@@ -61,7 +61,46 @@ function del(kind,id){const names={item:"项目",category:"分类",payment:"付�
 function openDB(){return dbPromise||(dbPromise=new Promise((resolve,reject)=>{const r=indexedDB.open(LOCAL_FILES,1);r.onupgradeneeded=()=>r.result.createObjectStore("docs");r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)}))}
 async function dbTask(type,id,val){const db=await openDB();return new Promise((res,rej)=>{const tx=db.transaction("docs",type==="get"?"readonly":"readwrite");const op=type==="put"?tx.objectStore("docs").put(val,id):type==="get"?tx.objectStore("docs").get(id):tx.objectStore("docs").delete(id);op.onsuccess=()=>res(op.result);op.onerror=()=>rej(op.error)})}
 const putLocalFile=(id,file)=>dbTask("put",id,file),getLocalFile=id=>dbTask("get",id),deleteLocalFile=id=>dbTask("delete",id);
-async function openFile(id){const f=state.files.find(x=>x.id===id);if(!f)return;try{let blob=await getLocalFile(id);if(!blob&&f.remote){if(!connected)throw Error("此文件存放在私库，请先授权设备");const response=await api("/api/file/"+encodeURIComponent(id),{raw:true});blob=await response.blob()}if(!blob)throw Error("此设备没有文件本体，请连接云端同步");const url=URL.createObjectURL(blob);window.open(url,"_blank","noopener");setTimeout(()=>URL.revokeObjectURL(url),60000)}catch(e){toast(e.message)}}
+let previewObjectUrl=null;
+function closePreview(){document.querySelector("#filePreviewOverlay")?.remove();if(previewObjectUrl){URL.revokeObjectURL(previewObjectUrl);previewObjectUrl=null}}
+async function openFile(id){
+ const f=state.files.find(x=>x.id===id);if(!f)return;
+ closePreview();
+ const overlay=document.createElement("div");overlay.id="filePreviewOverlay";overlay.className="preview-overlay";
+ overlay.innerHTML='<div class="preview-shell" role="dialog" aria-modal="true" aria-label="文件预览"><div class="preview-top"><div class="preview-title"></div><div class="preview-tools"><button type="button" class="btn small" id="previewDownload" disabled>下载</button><button type="button" class="btn small" id="previewClose">关闭</button></div></div><div class="preview-body" id="previewBody"><div class="preview-message">正在读取文件…</div></div></div>';
+ document.body.appendChild(overlay);
+ overlay.querySelector(".preview-title").textContent=f.name;
+ overlay.querySelector("#previewClose").onclick=closePreview;
+ overlay.addEventListener("click",e=>{if(e.target===overlay)closePreview()});
+ const body=overlay.querySelector("#previewBody"),download=overlay.querySelector("#previewDownload");
+ try{
+  let blob=await getLocalFile(id);
+  if(!blob&&f.remote){
+   if(!connected)throw Error("文件位于私人仓库，请先授权本设备");
+   const response=await api("/api/file/"+encodeURIComponent(id),{raw:true});
+   blob=await response.blob();
+  }
+  if(!blob)throw Error("当前设备没有这个文件，而且文件尚未成功同步至私人仓库");
+  if(!blob.size)throw Error("文件内容为空");
+  if(!document.body.contains(overlay))return;
+  const mime=f.mime||blob.type;
+  if(!["application/pdf","image/jpeg","image/png","image/webp"].includes(mime))throw Error("此文件格式暂不支持预览");
+  previewObjectUrl=URL.createObjectURL(new Blob([blob],{type:mime}));
+  download.disabled=false;
+  download.onclick=()=>{
+   const a=document.createElement("a");a.href=previewObjectUrl;a.download=f.name||"attachment";document.body.appendChild(a);a.click();a.remove();
+  };
+  body.replaceChildren();
+  if(mime==="application/pdf"){
+   const frame=document.createElement("iframe");
+   frame.className="preview-document";frame.title=f.name;frame.src=previewObjectUrl;
+   body.appendChild(frame);
+   const tip=document.createElement("div");tip.className="preview-tip";tip.textContent="如果此设备无法直接显示 PDF，请点击右上角「下载」后用系统文件应用打开。";body.appendChild(tip);
+  }else{
+   const image=document.createElement("img");image.className="preview-image";image.alt=f.name;image.src=previewObjectUrl;body.appendChild(image);
+  }
+ }catch(e){body.innerHTML='<div class="preview-message"></div>';body.firstChild.textContent="无法打开文件："+e.message;toast(e.message)}
+}
 
 const DEFAULT_URL="https://interior-budget-api.wangtszshan.workers.dev";
 const apiConfig=()=>({url:localStorage.getItem("interior-api-url")||DEFAULT_URL,token:localStorage.getItem("interior-session-token")||""});
@@ -154,6 +193,6 @@ async function initSession(){
 }
 function download(name,content,type){const u=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 function wire(){document.addEventListener("click",e=>{const t=e.target.closest("[data-page],[data-goto],[data-add],[data-edit],[data-delete],[data-toggle],[data-open-file]");if(!t)return;if(t.dataset.page||t.dataset.goto)return page(t.dataset.page||t.dataset.goto);if(t.dataset.add)return edit(t.dataset.add);if(t.dataset.edit)return edit(t.dataset.edit,t.dataset.id);if(t.dataset.delete)return del(t.dataset.delete,t.dataset.id);if(t.dataset.toggle){openCats.has(t.dataset.toggle)?openCats.delete(t.dataset.toggle):openCats.add(t.dataset.toggle);return render()}if(t.dataset.openFile)return openFile(t.dataset.openFile)});
-$("#search").oninput=e=>{search=e.target.value;render()};$("#filterStatus").onchange=e=>{filterStatus=e.target.value;render()};$("#saveLimit").onclick=()=>{let v=$("#limit").value;state.limit=v===""?null:Math.max(0,Number(v));persist();toast("预算上限已保存")};$("#connect").onclick=connect;$("#logout").onclick=()=>{if(dirty&&!confirm("存在未同步修改，退出后仍保留在本机，但不再自动同步。确认退出？"))return;localStorage.removeItem("interior-session-token");localStorage.removeItem("interior-session-expiry");connected=false;clearTimeout(syncTimer);setSyncStatus("本设备已退出，重新验证后可继续同步");render();toast("已退出本设备")};$("#pull").onclick=pull;$("#push").onclick=()=>push(false);$("#export").onclick=()=>download("装修预算备份-"+today()+".json",JSON.stringify(state,null,2),"application/json");$("#csv").onclick=()=>{const rows=[["分类","项目","数量","单位","计划单价","报价单价","成交单价","当前预计合计","状态","供应商","备注"],...state.items.map(i=>[categoryName(i.categoryId),i.name,i.quantity,i.unit,i.budget??"",i.quote??"",i.actual??"",priceFor(i)??"",statusNames[i.status],i.vendor,i.notes])];download("装修预算明细-"+today()+".csv","\ufeff"+rows.map(r=>r.map(x=>'"'+String(x??"").replace(/"/g,'""')+'"').join(",")).join("\r\n"),"text/csv;charset=utf-8")};$("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!Array.isArray(d.items)||!Array.isArray(d.categories)||!Array.isArray(d.payments))throw Error("数据格式不正确");if(!confirm("导入将覆盖当前预算数据（不包含文件二进制），确定继续？"))return;state=d;setRemoteSha(null);persist();toast("预算备份已导入，已暂停自动覆盖原有云端数据");conflict=true}catch(err){toast(err.message)}e.target.value=""};$("#apiUrl").value=apiConfig().url;$("#apiPassword").value="";window.addEventListener("storage",e=>{if(e.key===KEY){try{state=JSON.parse(e.newValue);render()}catch{}}});if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});}
+$("#search").oninput=e=>{search=e.target.value;render()};$("#filterStatus").onchange=e=>{filterStatus=e.target.value;render()};$("#saveLimit").onclick=()=>{let v=$("#limit").value;state.limit=v===""?null:Math.max(0,Number(v));persist();toast("预算上限已保存")};$("#connect").onclick=connect;$("#logout").onclick=()=>{if(dirty&&!confirm("存在未同步修改，退出后仍保留在本机，但不再自动同步。确认退出？"))return;localStorage.removeItem("interior-session-token");localStorage.removeItem("interior-session-expiry");connected=false;clearTimeout(syncTimer);setSyncStatus("本设备已退出，重新验证后可继续同步");render();toast("已退出本设备")};$("#pull").onclick=pull;$("#push").onclick=()=>push(false);$("#export").onclick=()=>download("装修预算备份-"+today()+".json",JSON.stringify(state,null,2),"application/json");$("#csv").onclick=()=>{const rows=[["分类","项目","数量","单位","计划单价","报价单价","成交单价","当前预计合计","状态","供应商","备注"],...state.items.map(i=>[categoryName(i.categoryId),i.name,i.quantity,i.unit,i.budget??"",i.quote??"",i.actual??"",priceFor(i)??"",statusNames[i.status],i.vendor,i.notes])];download("装修预算明细-"+today()+".csv","\ufeff"+rows.map(r=>r.map(x=>'"'+String(x??"").replace(/"/g,'""')+'"').join(",")).join("\r\n"),"text/csv;charset=utf-8")};$("#import").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!Array.isArray(d.items)||!Array.isArray(d.categories)||!Array.isArray(d.payments))throw Error("数据格式不正确");if(!confirm("导入将覆盖当前预算数据（不包含文件二进制），确定继续？"))return;state=d;setRemoteSha(null);persist();toast("预算备份已导入，已暂停自动覆盖原有云端数据");conflict=true}catch(err){toast(err.message)}e.target.value=""};$("#apiUrl").value=apiConfig().url;$("#apiPassword").value="";document.addEventListener("keydown",e=>{if(e.key==="Escape")closePreview()});window.addEventListener("storage",e=>{if(e.key===KEY){try{state=JSON.parse(e.newValue);render()}catch{}}});if("serviceWorker"in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});}
 openCats=new Set(state.categories.map(c=>c.id));wire();render();initSession();document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&connected){if(dirty)scheduleSync();else refreshFromCloud()}});
 })();
