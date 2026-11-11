@@ -20,7 +20,7 @@ function show({blob,mount,file}){
  const tasks=new Map();
  mount.replaceChildren();
  const root=document.createElement("div");root.className="pdf-viewer";
- root.innerHTML='<div class="pdf-controls"><span class="pdf-counter">正在打开 PDF…</span><span class="pdf-control-group"><button type="button" data-prev="1" title="上一页">‹</button><span class="pdf-current">1 / 1</span><button type="button" data-next="1" title="下一页">›</button><button type="button" data-zoom="-1" title="缩小">−</button><span class="pdf-zoom-label">100%</span><button type="button" data-zoom="1" title="放大">＋</button><button type="button" data-fit="1">适宽</button></span></div><div class="pdf-scroll" tabindex="0" aria-label="PDF 连续阅读区"></div>';
+ root.innerHTML='<div class="pdf-controls"><span class="pdf-counter">正在打开 PDF…</span><span class="pdf-control-group"><button type="button" data-prev="1" title="上一页">‹</button><span class="pdf-current">1 / 1</span><button type="button" data-next="1" title="下一页">›</button><button type="button" data-pan="-1" title="向左查看">←</button><button type="button" data-pan="1" title="向右查看">→</button><button type="button" data-zoom="-1" title="缩小">−</button><span class="pdf-zoom-label">100%</span><button type="button" data-zoom="1" title="放大">＋</button><button type="button" data-fit="1">适宽</button></span></div><div class="pdf-scroll" tabindex="0" aria-label="PDF 连续阅读区"></div>';
  mount.appendChild(root);
  const container=root.querySelector(".pdf-scroll"),counter=root.querySelector(".pdf-counter"),zoomLabel=root.querySelector(".pdf-zoom-label"),currentLabel=root.querySelector(".pdf-current");
  let currentPage=1;
@@ -93,6 +93,7 @@ function show({blob,mount,file}){
    for(const n of [1,2,3])if(n<=pdf.numPages)draw(n,round);
   }).catch(()=>{if(round===generation)draw(1,round)});
  }
+ root.querySelectorAll("[data-pan]").forEach(b=>b.onclick=()=>container.scrollBy({left:Number(b.dataset.pan)*Math.max(120,container.clientWidth*0.65),behavior:"smooth"}));
  root.querySelectorAll("[data-zoom]").forEach(b=>b.onclick=()=>{const next=clamp(Math.round((zoom+Number(b.dataset.zoom)*.2)*10)/10,.6,3);if(next!==zoom){zoom=next;refresh()}});
  root.querySelector("[data-fit]").onclick=()=>{zoom=1;refresh()};
  (async()=>{
