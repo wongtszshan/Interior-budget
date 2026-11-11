@@ -180,17 +180,12 @@ async function push(automatic=false){
   if((snap.sha||null)!==(remoteSha||null)){conflict=true;setSyncStatus("其他设备修改了预算，已停止自动覆盖。请导出本地 JSON 备份，再决定如何合并。");toast("跨设备版本冲突，未覆盖云端数据");return;}
   for(const f of state.files.filter(f=>!f.remote)){
    const blob=await getLocalFile(f.id);if(!blob)throw Error("找不到本地附件 "+f.name);
-   if(true){
     const {url,token}=apiConfig();
     if(!url||!token)throw Error("请先授权本设备");
     const response=await fetch(url.replace(/\/+$/,"")+"/api/r2-file/"+encodeURIComponent(f.id),{method:"PUT",headers:{"Authorization":"Bearer "+token,"Content-Type":f.mime,"X-File-Type":f.mime,"X-File-Size":String(blob.size)},body:blob,cache:"no-store"});
     if(!response.ok){const payload=await response.json().catch(()=>({error:"Upload failed"}));throw Error("R2 文件上传失败："+(payload.error||response.status))}
     f.storage="r2";
-   }else{
-    const content=await fileToBase64(blob);
-    await api("/api/file",{method:"POST",body:{id:f.id,name:f.name,mime:f.mime,base64:content}});
-    f.storage="github";
-   }
+
    f.remote=true;
    localStorage.setItem(KEY,JSON.stringify(state));
   }
