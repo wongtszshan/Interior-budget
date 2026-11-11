@@ -86,16 +86,36 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    mapping=guessed(columns);
    selected=new Set();viewLimit=250;rawLimit=200;renderMode();
   }
+  function sourceTable(maxRows,maxCols){
+   const occupied=new Set(),rmax=Math.min(allRows.length,maxRows),cmax=Math.min(columns.length,maxCols);
+   const mergeMap=new Map();
+   for(const m of merges){
+    const sr=m.s.r,sc=m.s.c;
+    if(sr>=rmax||sc>=cmax)continue;
+    const er=Math.min(m.e.r,rmax-1),ec=Math.min(m.e.c,cmax-1);
+    mergeMap.set(sr+":"+sc,{rows:er-sr+1,cols:ec-sc+1});
+    for(let r=sr;r<=er;r++)for(let c=sc;c<=ec;c++)if(r!==sr||c!==sc)occupied.add(r+":"+c);
+   }
+   const heads=Array.from({length:cmax},(_,c)=>'<th>'+letter(c)+'</th>').join("");
+   const body=allRows.slice(0,rmax).map((cells,r)=>{
+    const cellsHTML=Array.from({length:cmax},(_,c)=>{
+     if(occupied.has(r+":"+c))return "";
+     const merge=mergeMap.get(r+":"+c),spans=merge?(' rowspan="'+merge.rows+'" colspan="'+merge.cols+'"'):"";
+     return '<td'+spans+'>'+esc(cells[c]||"")+'</td>';
+    }).join("");
+    return '<tr><th>'+(r+1)+'</th>'+cellsHTML+'</tr>';
+   }).join("");
+   return '<table class="excel-sheet-table"><thead><tr><th>行</th>'+heads+'</tr></thead><tbody>'+body+'</tbody></table>';
+  }
   function renderMode(){root.classList.toggle("excel-import-mode",mode==="import");if(mode==="view")renderViewer();else render()}
   function renderViewer(){
    const sheetOptions=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?'selected':'')+'>'+esc(v)+'</option>').join("");
    const maxColumns=Math.min(60,Math.max(1,...allRows.map(r=>r.length)));
    const maxRows=Math.min(viewLimit,allRows.length);
-   const headers=Array.from({length:maxColumns},(_,i)=>'<th>'+esc(i<26?String.fromCharCode(65+i):String.fromCharCode(65+Math.floor(i/26)-1)+String.fromCharCode(65+i%26))+'</th>').join("");
-   const trs=allRows.slice(0,maxRows).map((row,i)=>'<tr><th>'+Number(i+1)+'</th>'+Array.from({length:maxColumns},(_,j)=>'<td>'+esc(row[j]??"")+'</td>').join("")+'</tr>').join("");
+   const tableMarkup=sourceTable(maxRows,maxColumns);
    root.innerHTML='<div class="excel-view-toolbar"><label>工作表 <select class="field" id="excelViewSheet">'+sheetOptions+'</select></label><button type="button" class="btn primary" id="excelSwitchImport">导入预算明细</button></div>'+
    '<div class="excel-notice">当前为只读预览，不会导入或修改预算。左右滑动查看列，上下滑动查看行。当前显示 '+maxRows+' / '+allRows.length+' 行；此模式不展示 Excel 内嵌图片和完整排版，如需查看请点顶部「用其他 App 打开」。</div>'+
-   '<div class="excel-sheet-scroller" tabindex="0" aria-label="Excel 工作表预览"><table class="excel-sheet-table"><thead><tr><th>行</th>'+headers+'</tr></thead><tbody>'+trs+'</tbody></table></div>'+
+   '<div class="excel-sheet-scroller" tabindex="0" aria-label="Excel 工作表预览">'+tableMarkup+'</div>'+
    (maxRows<allRows.length?'<button type="button" class="btn" id="excelViewMore">继续显示后面 250 行（剩余 '+(allRows.length-maxRows)+' 行）</button>':'');
    root.querySelector("#excelViewSheet").onchange=e=>{sheet=e.target.value;header=0;loadSheet()};
    root.querySelector("#excelSwitchImport").onclick=()=>{mode="import";renderMode()};
@@ -137,11 +157,11 @@ function show({blob,file,mount,categories,existingNames,onImport}){
    const sheets=wb.SheetNames.map(v=>'<option value="'+esc(v)+'" '+(v===sheet?"selected":"")+'>'+esc(v)+'</option>').join("");
    const selectFields=keys.map(k=>'<label class="excel-map-field">'+esc(k.label)+'<select class="field" data-column="'+k.key+'">'+colOptions(columns,mapping[k.key],k.key!=="name")+'</select></label>').join("");
    const display=mappedRows.slice(0,1000);
-   const rawPreview=allRows.slice(0,rawLimit).map((r,i)=>"<tr><td>"+(i+1)+"</td>"+Array.from({length:Math.min(14,columns.length)},(_,j)=>"<td>"+esc(r[j]??"")+"</td>").join("")+"</tr>").join("");
+   const rawPreview=sourceTable(rawLimit,Math.min(14,columns.length));
    const rows=display.map(r=>'<tr class="'+(r.duplicate?"excel-duplicate":"")+'"><td><input type="checkbox" data-row="'+r.index+'" '+(selected.has(r.index)?"checked":"")+' '+(!r.valid||r.duplicate?"disabled":"")+'></td><td>'+(r.index+1)+'</td><td>'+esc(r.name)+(r.duplicate?' <span class="chip warn">名称重复</span>':!r.valid?' <span class="chip warn">缺少有效金额</span>':"")+'</td><td>'+esc(r.quantity)+'</td><td>'+esc(r.unit)+'</td><td>'+ (r.unitPrice===null?"—":"¥"+r.unitPrice.toFixed(2))+'</td><td>'+(r.total===null?"—":"¥"+r.total.toFixed(2))+'</td></tr>').join("");
    root.innerHTML='<div class="excel-mode-toolbar"><button type="button" class="btn" id="excelBackView">← 返回表格预览</button><strong>选择报价明细导入预算</strong></div><div class="excel-controls"><label>工作表<select class="field" id="excelSheet">'+sheets+'</select></label><label>表头所在行<select class="field" id="excelHeader">'+headerOpts+'</select></label></div>'+
-   '<div class="excel-notice">复杂报价推荐：空间/柜体=A，项目名称=B，面积/数量=E，单价=F，行金额=G；H 通常是分组小计，不要选作行金额。0 元行及小计行默认不允许导入。请核对每行。表格仅在浏览器解析。</div>'+
-   '<details class="excel-source" open><summary>查看原始工作表（当前 '+Math.min(rawLimit,allRows.length)+' / '+allRows.length+' 行，前 14 列）</summary><div class="excel-table-wrap"><table class="excel-table"><tbody>'+rawPreview+'</tbody></table></div>'+(rawLimit<allRows.length?'<button type="button" class="btn" id="excelRawMore">继续显示后面 200 行</button>':'')+'</details><div class="excel-mapping">'+selectFields+'</div>'+
+   '<div class="excel-notice">请按<strong>Excel 原文件的列字母</strong>选择，不是按示例值筛选。对于你提供的定制柜报价：A=空间、B=项目、E=面积/数量、F=单价、G=行金额；H 是分组小计，不要选。预览保留合并单元格关系，但不完全复刻 Excel 样式。</div>'+
+   '<details class="excel-source" open><summary>查看原始工作表（当前 '+Math.min(rawLimit,allRows.length)+' / '+allRows.length+' 行，前 14 列）</summary><div class="excel-table-wrap">'+rawPreview+'</div>'+(rawLimit<allRows.length?'<button type="button" class="btn" id="excelRawMore">继续显示后面 200 行</button>':'')+'</details><div class="excel-mapping">'+selectFields+'</div>'+
    '<div class="excel-import-options"><label>导入到预算分类<select class="field" id="excelCategory">'+cats+'</select></label><label>供应商 / 公司<input class="field" id="excelVendor" placeholder="可选，填报价方"></label></div>'+
    '<div class="excel-summary"><strong>可导入 '+mappedRows.filter(r=>r.valid&&!r.duplicate).length+' 项</strong><span>已勾选 <b id="excelSelected">'+selected.size+'</b> 项 · 显示 '+display.length+' 项</span></div>'+
    '<div class="excel-table-wrap"><table class="excel-table"><thead><tr><th><input id="excelCheckAll" type="checkbox"></th><th>行</th><th>项目</th><th>数量</th><th>单位</th><th>单价</th><th>总金额</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
