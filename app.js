@@ -101,6 +101,10 @@ async function refreshFromCloud(first=false){
    else scheduleSync();
    return;
   }
+  if(!remoteSha&&state.items.length>0&&JSON.stringify(state.items)!==JSON.stringify(r.data.items)){
+   conflict=true;setSyncStatus("检测到旧版本地数据与私库不一致。为避免覆盖，先导出本地 JSON 备份，再点击“读取云端”手动确认。");
+   toast("保留了旧版本地数据，未自动覆盖");return;
+  }
   state=r.data;setRemoteSha(r.sha);localStorage.setItem(KEY,JSON.stringify(state));render();
   setSyncStatus("已从私库同步："+new Date().toLocaleString("zh-CN"));
   if(first)toast("私人预算已自动载入");
