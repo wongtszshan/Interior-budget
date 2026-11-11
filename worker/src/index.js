@@ -1,19 +1,31 @@
 /**
  * Interior Budget private API (Cloudflare Worker)
- * Required encrypted secrets: GITHUB_TOKEN, APP_PASSWORD
+ * Required encrypted secrets: GITHUB_TOKEN, APP_PASSWORD, SESSION_SECRET
  * Required plain var: ALLOWED_ORIGIN (e.g. https://wongtszshan.github.io)
  * Optional: GITHUB_REPO (defaults to wongtszshan/Interior-budget-data)
- * Security: minimum 24-character random APP_PASSWORD and Cloudflare rate limiting are recommended.
+ * Security: minimum 32-character random SESSION_SECRET and 24-character random APP_PASSWORD and Cloudflare rate limiting are recommended.
  */
 const REPO="wongtszshan/Interior-budget-data", DATA_PATH="data/budget.json";
 const reply=(data,status=200,extra={})=>new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json;charset=utf-8","Cache-Control":"no-store",...extra}});
 const encode64=s=>btoa(Array.from(new TextEncoder().encode(s),b=>String.fromCharCode(b)).join(""));
 const decode64=s=>new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g,"")),c=>c.charCodeAt(0)));
 const github=async(env,path,method="GET",data)=>{const repo=env.GITHUB_REPO||REPO;const url="https://api.github.com/repos/"+repo+"/contents/"+path.split("/").map(encodeURIComponent).join("/");const res=await fetch(url,{method,headers:{"Authorization":"Bearer "+env.GITHUB_TOKEN,"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"interior-budget-worker","Content-Type":"application/json"},body:data?JSON.stringify(data):undefined});let json;try{json=await res.json()}catch{json={}}if(!res.ok){const e=new Error("GitHub "+res.status+" "+(json.message||"request failed"));e.status=res.status;throw e}return json};
+
+const SESSION_DAYS=30, SESSION_MS=SESSION_DAYS*24*60*60*1000;
+const b64u=bytes=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const unb64u=s=>Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(s.length/4)*4,"=")),c=>c.charCodeAt(0));
+const sessionKey=async env=>crypto.subtle.importKey("raw",new TextEncoder().encode(env.SESSION_SECRET),"HMAC",{hash:"SHA-256"},false,["sign","verify"]);
+const createSession=async env=>{const payload={v:1,iat:Date.now(),exp:Date.now()+SESSION_MS,jti:crypto.randomUUID()};const str=b64u(new TextEncoder().encode(JSON.stringify(payload)));const sig=b64u(new Uint8Array(await crypto.subtle.sign("HMAC",await sessionKey(env),new TextEncoder().encode(str))));return {token:str+"."+sig,expiresAt:payload.exp}};
+const verifySession=async(env,token)=>{if(!token||token.length>1500)return false;const parts=token.split(".");if(parts.length!==2)return false;try{const payload=JSON.parse(new TextDecoder().decode(unb64u(parts[0])));if(payload.v!==1||!Number.isFinite(payload.exp)||payload.exp<=Date.now()||payload.exp>Date.now()+SESSION_MS+60000)return false;return await crypto.subtle.verify("HMAC",await sessionKey(env),unb64u(parts[1]),new TextEncoder().encode(parts[0]))}catch{return false}};
 const secureEqual=(a,b)=>{const x=new TextEncoder().encode(a),y=new TextEncoder().encode(b);let diff=x.length^y.length;for(let i=0;i<Math.max(x.length,y.length);i++)diff|=(x[i]||0)^(y[i]||0);return diff===0};
 const cors=(origin,allowed)=>({"Access-Control-Allow-Origin":origin,"Access-Control-Allow-Headers":"authorization,content-type","Access-Control-Allow-Methods":"GET,PUT,POST,DELETE,OPTIONS","Vary":"Origin","Cache-Control":"no-store"});
 const validId=id=>/^[a-f0-9-]{16,48}$/i.test(id);
-export default{async fetch(request,env){const origin=request.headers.get("Origin")||"",allowed=(env.ALLOWED_ORIGIN||"").replace(/\/$/,""),isAllowed=origin===allowed&&allowed.startsWith("https://");if(request.method==="OPTIONS")return new Response(null,{status:isAllowed?204:403,headers:isAllowed?cors(origin,allowed):{}});if(!isAllowed)return reply({error:"Origin not permitted"},403);const h=cors(origin,allowed),respond=(obj,status=200)=>reply(obj,status,h);if(!env.GITHUB_TOKEN||!env.APP_PASSWORD||env.APP_PASSWORD.length<24)return respond({error:"Worker secrets are not configured correctly"},503);const auth=request.headers.get("Authorization")||"";if(!auth.startsWith("Bearer ")||!secureEqual(auth.slice(7),env.APP_PASSWORD))return respond({error:"Unauthorized"},401);const pathname=new URL(request.url).pathname;try{
+export default{async fetch(request,env){const origin=request.headers.get("Origin")||"",allowed=(env.ALLOWED_ORIGIN||"").replace(/\/$/,""),isAllowed=origin===allowed&&allowed.startsWith("https://");if(request.method==="OPTIONS")return new Response(null,{status:isAllowed?204:403,headers:isAllowed?cors(origin,allowed):{}});if(!isAllowed)return reply({error:"Origin not permitted"},403);const h=cors(origin,allowed),respond=(obj,status=200)=>reply(obj,status,h);if(!env.GITHUB_TOKEN||!env.APP_PASSWORD||env.APP_PASSWORD.length<24||!env.SESSION_SECRET||env.SESSION_SECRET.length<32)return respond({error:"Worker secrets are not configured correctly"},503);const pathname=new URL(request.url).pathname;try{
+if(pathname==="/api/login"&&request.method==="POST"){let data;try{data=await request.json()}catch{return respond({error:"Invalid login request"},400)}if(!secureEqual(String(data.password||""),env.APP_PASSWORD))return respond({error:"Incorrect password"},401);return respond(await createSession(env))}
+const auth=request.headers.get("Authorization")||"";
+if(!auth.startsWith("Bearer ")||!(await verifySession(env,auth.slice(7))))return respond({error:"Session expired or invalid"},401);
+if(pathname==="/api/session"&&request.method==="GET")return respond({ok:true});
+
 if(pathname==="/api/health"&&request.method==="GET")return respond({ok:true,repo:env.GITHUB_REPO||REPO});
 if(pathname==="/api/data"&&request.method==="GET"){try{const f=await github(env,DATA_PATH);return respond({sha:f.sha,data:JSON.parse(decode64(f.content))})}catch(e){if(e.status===404)return respond({sha:null,data:null});throw e}}
 if(pathname==="/api/data"&&request.method==="PUT"){const b=await request.json();if(!b.data||!Array.isArray(b.data.items)||!Array.isArray(b.data.categories)||!Array.isArray(b.data.payments)||!Array.isArray(b.data.files))return respond({error:"Invalid data"},400);if(JSON.stringify(b.data).length>900000)return respond({error:"Budget data is too large"},413);let actual=null;try{const f=await github(env,DATA_PATH);actual=f.sha}catch(e){if(e.status!==404)throw e}if((b.sha||null)!==(actual||null))return respond({error:"Cloud data changed; reload before saving"},409);const payload={message:"Sync renovation budget",content:encode64(JSON.stringify(b.data,null,2)),...(actual?{sha:actual}:{})};const file=await github(env,DATA_PATH,"PUT",payload);return respond({ok:true,sha:file.content.sha})}
