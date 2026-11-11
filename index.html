@@ -43,6 +43,36 @@
 .pdf-page-canvas{display:block;background:#fff;max-width:none;box-shadow:0 3px 14px #162b2326}
 .pdf-page-number{order:2;font-size:11px;color:#7a8b7d;text-align:center;padding:3px}
 @media(max-width:680px){.pdf-scroll{padding:8px 4px;gap:10px}.pdf-controls{padding:7px 8px}.pdf-control-group button{padding:6px 8px}}
+
+/* v1.6.3: mobile-safe document readers */
+.preview-shell{min-height:0}
+.preview-body{position:relative;display:block;min-height:0;overflow:hidden;overscroll-behavior:contain}
+.preview-body>.pdf-viewer,.preview-body>.excel-root{height:100%;min-height:0;width:100%}
+.pdf-viewer{display:flex;flex-direction:column;min-height:0;height:100%}
+.pdf-scroll{display:block;flex:1 1 0;min-height:0;height:auto;overflow-y:auto;overflow-x:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y pan-x;overscroll-behavior:contain;padding:12px 7px}
+.pdf-page-holder{display:flex;flex:0 0 auto;min-height:250px;width:100%;margin:0 auto 14px;align-items:center;justify-content:center;flex-direction:column;overflow:visible}
+.pdf-page-canvas{display:block;flex:none;max-width:none}
+.pdf-current{font-variant-numeric:tabular-nums;white-space:nowrap;font-size:12px}
+.excel-root{display:flex;min-height:0;overflow:hidden}
+.excel-view-toolbar,.excel-mode-toolbar{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.excel-view-toolbar label{display:flex;align-items:center;gap:6px;min-width:0;font-size:12px;font-weight:600;flex:1}
+.excel-view-toolbar label select{min-width:80px;max-width:300px;flex:1}
+.excel-sheet-scroller{width:100%;flex:1 1 0;min-height:120px;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;border:1px solid #e0e6de;border-radius:9px;overscroll-behavior:contain}
+.excel-sheet-table{border-collapse:separate;border-spacing:0;white-space:pre-wrap;min-width:max-content;font-size:12px;color:#293c31}
+.excel-sheet-table th,.excel-sheet-table td{border-right:1px solid #e0e8df;border-bottom:1px solid #e0e8df;padding:7px 9px;min-width:86px;max-width:270px;vertical-align:top;overflow-wrap:anywhere;background:#fff}
+.excel-sheet-table thead th{position:sticky;top:0;z-index:2;background:#edf3ed}
+.excel-sheet-table th:first-child{position:sticky;left:0;z-index:3;min-width:42px;background:#f2f5f1;text-align:center}
+.excel-sheet-table thead th:first-child{z-index:4}
+@media(max-width:680px){
+.preview-shell{height:100dvh;min-height:0;max-height:100dvh}
+.preview-body{height:100%;min-height:0;flex:1 1 0}
+.pdf-controls{flex-wrap:wrap}.pdf-control-group{flex-wrap:nowrap;gap:3px}
+.pdf-control-group button{padding:6px 7px}
+.excel-root{padding:9px;gap:9px}
+.excel-view-toolbar{align-items:stretch}
+.excel-view-toolbar .btn{font-size:12px;white-space:nowrap}
+.excel-sheet-table td{min-width:72px}
+}
 </style></head><body><div id="layout"><aside class="side"><div class="brand"><div class="logo">⌂</div><strong>住有计划</strong><small>INTERIOR BUDGET</small></div><button class="nav active" data-page="overview"><span>◫</span> 预算总览</button><button class="nav" data-page="items"><span>▤</span> 预算明细</button><button class="nav" data-page="files"><span>▣</span> 文件与报价</button><button class="nav" data-page="payments"><span>◈</span> 付款记录</button><button class="nav" data-page="settings"><span>⚙</span> 设置与同步</button><div class="sidefoot"><div id="syncLabel" class="status">本地数据</div><div style="margin-top:8px">首次授权后保持 30 天登录；联网时自动同步。</div></div></aside><main class="main">
 <section class="page on" id="overview"><div class="top"><div><div class="eyebrow">MY HOME · RENOVATION</div><h1>我的装修预算</h1><p>从构想到入住，每一笔费用都清清楚楚。</p></div><button class="btn primary" data-add="item">＋ 添加项目</button></div><div class="grid" id="metrics"></div><div class="section two"><article class="card"><div class="headrow"><h2>已知费用构成</h2><span class="chip">分类统计</span></div><div id="breakdown"></div></article><article class="card"><div class="headrow"><h2>待确认项目</h2><button class="linkbtn" data-goto="items">查看全部 →</button></div><div id="pending"></div></article></div><div class="section card"><div class="headrow"><h2>最近付款</h2><button class="linkbtn" data-goto="payments">管理付款 →</button></div><div id="recent"></div></div></section>
 <section class="page" id="items"><div class="top"><div><div class="eyebrow">PROJECTS & COSTS</div><h1>预算明细</h1><p>按类别管理，每项都可记录估价、报价与成交价。</p></div><div class="toolbar"><button class="btn" data-add="category">＋ 类别</button><button class="btn primary" data-add="item">＋ 项目</button></div></div><div class="filter"><input class="field" style="flex:1;min-width:150px" id="search" placeholder="搜索项目、品牌、备注…"><select class="field" style="width:auto" id="filterStatus"><option value="">全部状态</option><option value="pending">未报价</option><option value="quoted">已报价</option><option value="confirmed">已确认</option><option value="ordered">已购买/签约</option></select></div><div id="categories"></div></section>
