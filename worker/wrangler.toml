@@ -1,0 +1,10 @@
+name = "interior-budget-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+[vars]
+GITHUB_REPO = "wongtszshan/Interior-budget-data"
+ALLOWED_ORIGIN = "https://wongtszshan.github.io"
+# Configure encrypted secrets separately (never commit real values):
+# wrangler secret put GITHUB_TOKEN
+# wrangler secret put APP_PASSWORD
