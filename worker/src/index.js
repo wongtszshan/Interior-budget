@@ -18,7 +18,7 @@ const sessionKey=async env=>crypto.subtle.importKey("raw",new TextEncoder().enco
 const createSession=async env=>{const payload={v:1,iat:Date.now(),exp:Date.now()+SESSION_MS,jti:crypto.randomUUID()};const str=b64u(new TextEncoder().encode(JSON.stringify(payload)));const sig=b64u(new Uint8Array(await crypto.subtle.sign("HMAC",await sessionKey(env),new TextEncoder().encode(str))));return {token:str+"."+sig,expiresAt:payload.exp}};
 const verifySession=async(env,token)=>{if(!token||token.length>1500)return false;const parts=token.split(".");if(parts.length!==2)return false;try{const payload=JSON.parse(new TextDecoder().decode(unb64u(parts[0])));if(payload.v!==1||!Number.isFinite(payload.exp)||payload.exp<=Date.now()||payload.exp>Date.now()+SESSION_MS+60000)return false;return await crypto.subtle.verify("HMAC",await sessionKey(env),unb64u(parts[1]),new TextEncoder().encode(parts[0]))}catch{return false}};
 const secureEqual=(a,b)=>{const x=new TextEncoder().encode(a),y=new TextEncoder().encode(b);let diff=x.length^y.length;for(let i=0;i<Math.max(x.length,y.length);i++)diff|=(x[i]||0)^(y[i]||0);return diff===0};
-const cors=(origin,allowed)=>({"Access-Control-Allow-Origin":origin,"Access-Control-Allow-Headers":"authorization,content-type,x-file-type,x-file-size,x-showroom-name","Access-Control-Allow-Methods":"GET,PUT,POST,DELETE,OPTIONS","Vary":"Origin","Cache-Control":"no-store"});
+const cors=(origin,allowed)=>({"Access-Control-Allow-Origin":origin,"Access-Control-Allow-Headers":"authorization,content-type,x-file-type,x-file-size,x-showroom-name,x-file-type,x-file-size","Access-Control-Allow-Methods":"GET,PUT,POST,DELETE,OPTIONS","Vary":"Origin","Cache-Control":"no-store"});
 const validId=id=>/^[a-f0-9-]{16,48}$/i.test(id);
 export default{async fetch(request,env){const origin=request.headers.get("Origin")||"",allowed=(env.ALLOWED_ORIGIN||"").replace(/\/$/,""),isAllowed=origin===allowed&&allowed.startsWith("https://");if(request.method==="OPTIONS")return new Response(null,{status:isAllowed?204:403,headers:isAllowed?cors(origin,allowed):{}});if(!isAllowed)return reply({error:"Origin not permitted"},403);const h=cors(origin,allowed),respond=(obj,status=200)=>reply(obj,status,h);if(!env.GITHUB_TOKEN)return respond({error:"GITHUB_TOKEN is missing"},503);if(!env.APP_PASSWORD||env.APP_PASSWORD.length<24)return respond({error:"APP_PASSWORD must be at least 24 characters: update the Worker secret"},503);if(!env.SESSION_SECRET||env.SESSION_SECRET.length<32)return respond({error:"SESSION_SECRET is missing or too short"},503);const pathname=new URL(request.url).pathname;try{
 if(pathname==="/api/login"&&request.method==="POST"){let data;try{data=await request.json()}catch{return respond({error:"Invalid login request"},400)}if(!secureEqual(String(data.password||""),env.APP_PASSWORD))return respond({error:"Incorrect password"},401);return respond(await createSession(env))}
@@ -68,6 +68,78 @@ if(pathname==="/api/showroom"&&request.method==="PUT"){
  await env.DOCUMENTS.put("showroom/current.json",JSON.stringify(info),{httpMetadata:{contentType:"application/json"}});
  return respond({ok:true,name,size:info.size,updatedAt,version});
 }
+
+// Design gallery: private R2 photos + catalog. Kept separate from budget.json.
+// All routes below reuse the existing signed session, origin restriction, and DOCUMENTS binding.
+const galleryKey="design-gallery/catalog.json",maxGallery=300;
+const imageMatch=pathname.match(/^\/api\/design-gallery\/image\/([a-f0-9-]{36})\/(original|thumb)$/i);
+const galleryMime={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"};
+const loadGallery=async()=>{const obj=await env.DOCUMENTS.get(galleryKey);return obj?{items:await obj.json(),etag:obj.httpEtag}:{items:[],etag:null}};
+const galleryPath=(id,kind)=>"design-gallery/"+kind+"/"+id+(kind==="thumb"?".webp":".bin");
+if(pathname.startsWith("/api/design-gallery")){
+ if(!env.DOCUMENTS)return respond({error:"Private R2 bucket is not configured"},503);
+ if(pathname==="/api/design-gallery"&&request.method==="GET"){
+  const g=await loadGallery();return respond({items:g.items,revision:g.etag||""});
+ }
+ if(imageMatch){
+  const id=imageMatch[1],kind=imageMatch[2],key=galleryPath(id,kind);
+  if(request.method==="PUT"){
+   const mime=request.headers.get("X-File-Type")||"";
+   if(kind==="thumb"?mime!=="image/webp":!galleryMime[mime])return respond({error:"Unsupported image type"},400);
+   const declared=Number(request.headers.get("X-File-Size")||"0"),max=kind==="thumb"?2*1024*1024:15*1024*1024;
+   if(!Number.isSafeInteger(declared)||declared<1||declared>max)return respond({error:"Image size invalid"},413);
+   if(await env.DOCUMENTS.head(key))return respond({error:"Image ID already exists"},409);
+   const body=await request.arrayBuffer();
+   if(body.byteLength!==declared)return respond({error:"Image size mismatch"},400);
+   const b=new Uint8Array(body);
+   const isJpeg=b[0]===255&&b[1]===216&&b[2]===255;
+   const isPng=b[0]===137&&b[1]===80&&b[2]===78&&b[3]===71&&b[4]===13&&b[5]===10;
+   const isWebp=String.fromCharCode(...b.slice(0,4))==="RIFF"&&String.fromCharCode(...b.slice(8,12))==="WEBP";
+   if(!(mime==="image/jpeg"&&isJpeg||mime==="image/png"&&isPng||mime==="image/webp"&&isWebp))return respond({error:"Image format does not match file content"},400);
+   await env.DOCUMENTS.put(key,body,{httpMetadata:{contentType:mime}});
+   return respond({ok:true,id,kind,size:body.byteLength});
+  }
+  if(request.method==="GET"){
+   const g=await loadGallery();
+   if(!g.items.some(x=>x.id===id))return respond({error:"Image not found"},404);
+   let obj=await env.DOCUMENTS.get(key);
+   if(!obj&&kind==="thumb")obj=await env.DOCUMENTS.get(galleryPath(id,"original"));
+   if(!obj)return respond({error:"Image unavailable"},404);
+   return new Response(obj.body,{headers:{...h,"Content-Type":obj.httpMetadata?.contentType||"application/octet-stream","Cache-Control":"no-store, private","Content-Disposition":"attachment; filename=\"design-image\"","X-Content-Type-Options":"nosniff"}});
+  }
+ }
+ if(pathname==="/api/design-gallery/entry"&&request.method==="POST"){
+  const b=await request.json();
+  if(!["create","update","delete"].includes(b.action)||typeof b.revision!=="string"||!/^[a-f0-9-]{36}$/i.test(b.id||""))return respond({error:"Invalid gallery operation"},400);
+  const g=await loadGallery();
+  if(b.revision!==(g.etag||""))return respond({error:"Gallery changed on another device. Refresh and retry."},409);
+  const existing=g.items.find(x=>x.id===b.id);
+  if(b.action==="create"&&(existing||g.items.length>=maxGallery))return respond({error:"Gallery full or image already exists"},409);
+  if(b.action!=="create"&&!existing)return respond({error:"Gallery entry unavailable"},404);
+  const field=(x,max=120)=>typeof x==="string"?x.trim().slice(0,max):"";
+  const allowedStatus=["待比较","需要修改","已确认","已淘汰"];
+  const meta=b.meta||{};
+  if(b.action!=="delete"&&(!field(meta.name,150)||!field(meta.space,60)))return respond({error:"Image name and space are required"},400);
+  if(b.action==="create"&&!(await env.DOCUMENTS.head(galleryPath(b.id,"original"))))return respond({error:"Upload original image first"},400);
+  const now=new Date().toISOString();
+  const data=b.action==="delete"?null:{
+   id:b.id,name:field(meta.name,150),space:field(meta.space,60),provider:field(meta.provider,100),
+   version:field(meta.version,40)||"V1",status:allowedStatus.includes(meta.status)?meta.status:"待比较",
+   note:field(meta.note,2000),linkedBudgetId:field(meta.linkedBudgetId,80),
+   mime:b.action==="create"?field(meta.mime,60):existing.mime,
+   size:b.action==="create"?Number(meta.size)||0:existing.size,
+   createdAt:existing?.createdAt||now,updatedAt:now
+  };
+  if(b.action==="create"&&!galleryMime[data.mime])return respond({error:"Invalid image MIME"},400);
+  const items=b.action==="create"?[data,...g.items]:b.action==="update"?g.items.map(x=>x.id===b.id?data:x):g.items.filter(x=>x.id!==b.id);
+  const obj=await env.DOCUMENTS.put(galleryKey,JSON.stringify(items),{httpMetadata:{contentType:"application/json"},onlyIf:g.etag?{etagMatches:g.etag}:{etagDoesNotMatch:"*"}});
+  if(!obj)return respond({error:"Gallery was updated concurrently; refresh and retry."},409);
+  if(b.action==="delete")await Promise.allSettled(["original","thumb"].map(kind=>env.DOCUMENTS.delete(galleryPath(b.id,kind))));
+  return respond({ok:true,items,revision:obj.httpEtag||""});
+ }
+ return respond({error:"Gallery route not found"},404);
+}
+
 // Files larger than 7 MiB are streamed into a private R2 bucket.
 // No public bucket domain and no long-lived R2 credentials are exposed.
 const r2Match=pathname.match(/^\/api\/r2-file\/([a-f0-9-]{16,48})$/i);
