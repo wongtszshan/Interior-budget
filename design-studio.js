@@ -5,6 +5,7 @@ const $=s=>document.querySelector(s);
 const apiBase=()=>localStorage.getItem("interior-api-url")||"https://interior-budget-api.wangtszshan.workers.dev";
 const token=()=>localStorage.getItem("interior-session-token")||"";
 const state={private:false,loaded:false,busy:false,objectUrl:null};
+const setViewerEnabled=enabled=>{const b=$("#designOpenBtn");if(b){b.disabled=!enabled;b.title=enabled?"":"请先上传私人 HTML 样板间"}};
 const statusText=()=>$("#designUploadStatus");
 const setStatus=(s,isError=false)=>{const e=statusText();if(e){e.textContent=s;e.style.color=isError?"#ab514b":"#667e6e"}};
 async function request(path,options={}){
@@ -15,14 +16,14 @@ async function request(path,options={}){
 }
 async function loadStatus(){
  if(state.busy)return;
- if(!token()){setStatus("尚未连接私人存储。请先到「设置与同步」授权设备。");return}
+ if(!token()){state.private=false;state.loaded=false;setViewerEnabled(false);setStatus("尚未连接私人存储。请先到「设置与同步」授权设备。");return}
  try{
  const r=await request("/api/showroom/status");
- state.private=!!r.exists;state.loaded=true;
+ state.private=!!r.exists;state.loaded=true;setViewerEnabled(state.private);
  const source=$("#designSourceLabel");
  if(r.exists){source.textContent="私人 R2 方案";$("#designFileName").textContent=r.name||"showroom.html";$("#designFileMeta").textContent="已上传 · "+new Date(r.updatedAt).toLocaleString("zh-CN")+" · "+(r.size/1024).toFixed(0)+" KB";setStatus("已读取私人云端方案，上传新 HTML 即可替换当前展示。")}
- else{source.textContent="初始公开方案";$("#designFileName").textContent="封阳台版 3D 样板间";$("#designFileMeta").textContent="默认演示文件 · 后续上传后优先使用私人版本";setStatus("私人存储暂无样板间，可上传新 HTML 作为当前方案。")}
- }catch(e){state.loaded=false;setStatus("读取私人方案失败："+e.message,true)}
+ else{source.textContent="等待上传";$("#designFileName").textContent="尚未上传 3D 样板间";$("#designFileMeta").textContent="可从电脑或手机选择 HTML 文件上传至私人 R2";setStatus("当前没有样板间。上传后即可进入 3D 漫游。")}
+ }catch(e){state.loaded=false;state.private=false;setViewerEnabled(false);setStatus("读取私人方案失败："+e.message,true)}
 }
 async function upload(file){
  if(!file)return;
@@ -45,15 +46,14 @@ function closeViewer(){
  document.body.style.overflow="";
 }
 async function view(){
+ if(!state.private){setStatus("请先上传 HTML 样板间，再进入 3D 漫游。",true);return}
  if($("#designViewerOverlay"))return;
  const overlay=document.createElement("div");overlay.id="designViewerOverlay";overlay.className="design-viewer-overlay";
  overlay.innerHTML='<div class="design-viewer-toolbar"><span id="designViewerTitle">3D 样板间 · 安全隔离预览</span><button type="button" class="btn" id="designViewerClose">关闭 ✕</button></div><div class="design-viewer-stage"><div class="design-viewer-loading" id="designViewerLoading">正在载入 3D 样板间…</div></div>';
  document.body.append(overlay);document.body.style.overflow="hidden";
  overlay.querySelector("#designViewerClose").addEventListener("click",closeViewer);
  try{
- let blob;
- if(state.private){blob=await request("/api/showroom",{binary:true})}
- else{const r=await fetch("./design/showroom.html",{cache:"no-store"});if(!r.ok)throw Error("默认样板间无法读取");blob=await r.blob()}
+ const blob=await request("/api/showroom",{binary:true});
  if(!document.body.contains(overlay))return;
  state.objectUrl=URL.createObjectURL(new Blob([blob],{type:"text/html;charset=utf-8"}));
  const frame=document.createElement("iframe");frame.className="design-viewer-frame";frame.title="独立沙盒 3D 样板间";
@@ -71,7 +71,8 @@ function init(){
  document.addEventListener("click",e=>{if(e.target.closest('[data-page="design"],[data-goto="design"]'))setTimeout(loadStatus,50)});
  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&$("#designViewerOverlay"))closeViewer()});
  document.addEventListener("visibilitychange",()=>{if(!document.hidden&&document.querySelector("#design.page.on"))loadStatus()});
- if(token())loadStatus();else setStatus("初始展示为公开样板间。授权设备后可以上传私人 HTML 版本。");
+ setViewerEnabled(false);
+ if(token())loadStatus();else setStatus("请先在「设置与同步」授权本设备，再上传私人 HTML 样板间。");
 }
 if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();
 })();
