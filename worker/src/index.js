@@ -74,7 +74,7 @@ if(pathname==="/api/showroom"&&request.method==="PUT"){
 const galleryKey="design-gallery/catalog.json",maxGallery=300;
 const imageMatch=pathname.match(/^\/api\/design-gallery\/image\/([a-f0-9-]{36})\/(original|thumb)$/i);
 const galleryMime={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"};
-const loadGallery=async()=>{const obj=await env.DOCUMENTS.get(galleryKey);return obj?{items:await obj.json(),etag:obj.httpEtag}:{items:[],etag:null}};
+const loadGallery=async()=>{const obj=await env.DOCUMENTS.get(galleryKey);return obj?{items:await obj.json(),etag:obj.etag}:{items:[],etag:null}};
 const galleryPath=(id,kind)=>"design-gallery/"+kind+"/"+id+(kind==="thumb"?".webp":".bin");
 if(pathname.startsWith("/api/design-gallery")){
  if(!env.DOCUMENTS)return respond({error:"Private R2 bucket is not configured"},503);
@@ -135,7 +135,7 @@ if(pathname.startsWith("/api/design-gallery")){
   const obj=await env.DOCUMENTS.put(galleryKey,JSON.stringify(items),{httpMetadata:{contentType:"application/json"},onlyIf:g.etag?{etagMatches:g.etag}:{etagDoesNotMatch:"*"}});
   if(!obj)return respond({error:"Gallery was updated concurrently; refresh and retry."},409);
   if(b.action==="delete")await Promise.allSettled(["original","thumb"].map(kind=>env.DOCUMENTS.delete(galleryPath(b.id,kind))));
-  return respond({ok:true,items,revision:obj.httpEtag||""});
+  return respond({ok:true,items,revision:obj.etag||""});
  }
  return respond({error:"Gallery route not found"},404);
 }
