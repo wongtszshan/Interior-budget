@@ -18,7 +18,7 @@ const sessionKey=async env=>crypto.subtle.importKey("raw",new TextEncoder().enco
 const createSession=async env=>{const payload={v:1,iat:Date.now(),exp:Date.now()+SESSION_MS,jti:crypto.randomUUID()};const str=b64u(new TextEncoder().encode(JSON.stringify(payload)));const sig=b64u(new Uint8Array(await crypto.subtle.sign("HMAC",await sessionKey(env),new TextEncoder().encode(str))));return {token:str+"."+sig,expiresAt:payload.exp}};
 const verifySession=async(env,token)=>{if(!token||token.length>1500)return false;const parts=token.split(".");if(parts.length!==2)return false;try{const payload=JSON.parse(new TextDecoder().decode(unb64u(parts[0])));if(payload.v!==1||!Number.isFinite(payload.exp)||payload.exp<=Date.now()||payload.exp>Date.now()+SESSION_MS+60000)return false;return await crypto.subtle.verify("HMAC",await sessionKey(env),unb64u(parts[1]),new TextEncoder().encode(parts[0]))}catch{return false}};
 const secureEqual=(a,b)=>{const x=new TextEncoder().encode(a),y=new TextEncoder().encode(b);let diff=x.length^y.length;for(let i=0;i<Math.max(x.length,y.length);i++)diff|=(x[i]||0)^(y[i]||0);return diff===0};
-const cors=(origin,allowed)=>({"Access-Control-Allow-Origin":origin,"Access-Control-Allow-Headers":"authorization,content-type,x-file-type,x-file-size","Access-Control-Allow-Methods":"GET,PUT,POST,DELETE,OPTIONS","Vary":"Origin","Cache-Control":"no-store"});
+const cors=(origin,allowed)=>({"Access-Control-Allow-Origin":origin,"Access-Control-Allow-Headers":"authorization,content-type,x-file-type,x-file-size,x-showroom-name","Access-Control-Allow-Methods":"GET,PUT,POST,DELETE,OPTIONS","Vary":"Origin","Cache-Control":"no-store"});
 const validId=id=>/^[a-f0-9-]{16,48}$/i.test(id);
 export default{async fetch(request,env){const origin=request.headers.get("Origin")||"",allowed=(env.ALLOWED_ORIGIN||"").replace(/\/$/,""),isAllowed=origin===allowed&&allowed.startsWith("https://");if(request.method==="OPTIONS")return new Response(null,{status:isAllowed?204:403,headers:isAllowed?cors(origin,allowed):{}});if(!isAllowed)return reply({error:"Origin not permitted"},403);const h=cors(origin,allowed),respond=(obj,status=200)=>reply(obj,status,h);if(!env.GITHUB_TOKEN)return respond({error:"GITHUB_TOKEN is missing"},503);if(!env.APP_PASSWORD||env.APP_PASSWORD.length<24)return respond({error:"APP_PASSWORD must be at least 24 characters: update the Worker secret"},503);if(!env.SESSION_SECRET||env.SESSION_SECRET.length<32)return respond({error:"SESSION_SECRET is missing or too short"},503);const pathname=new URL(request.url).pathname;try{
 if(pathname==="/api/login"&&request.method==="POST"){let data;try{data=await request.json()}catch{return respond({error:"Invalid login request"},400)}if(!secureEqual(String(data.password||""),env.APP_PASSWORD))return respond({error:"Incorrect password"},401);return respond(await createSession(env))}
@@ -30,6 +30,44 @@ if(pathname==="/api/health"&&request.method==="GET")return respond({ok:true,repo
 if(pathname==="/api/data"&&request.method==="GET"){try{const f=await github(env,DATA_PATH);return respond({sha:f.sha,data:JSON.parse(decode64(f.content))})}catch(e){if(e.status===404)return respond({sha:null,data:null});throw e}}
 if(pathname==="/api/data"&&request.method==="PUT"){const b=await request.json();if(!b.data||!Array.isArray(b.data.items)||!Array.isArray(b.data.categories)||!Array.isArray(b.data.payments)||!Array.isArray(b.data.files))return respond({error:"Invalid data"},400);if(JSON.stringify(b.data).length>900000)return respond({error:"Budget data is too large"},413);let actual=null;try{const f=await github(env,DATA_PATH);actual=f.sha}catch(e){if(e.status!==404)throw e}if((b.sha||null)!==(actual||null))return respond({error:"Cloud data changed; reload before saving"},409);const payload={message:"Sync renovation budget",content:encode64(JSON.stringify(b.data,null,2)),...(actual?{sha:actual}:{})};const file=await github(env,DATA_PATH,"PUT",payload);return respond({ok:true,sha:file.content.sha})}
 
+// Private HTML showroom. Data is stored outside budget.json and served only after session verification.
+// The browser MUST display this untrusted HTML in a sandboxed iframe without allow-same-origin.
+if(pathname==="/api/showroom/status"&&request.method==="GET"){
+ if(!env.DOCUMENTS)return respond({error:"Private R2 bucket is not configured"},503);
+ const current=await env.DOCUMENTS.get("showroom/current.json");
+ if(!current)return respond({exists:false});
+ const info=await current.json();
+ return respond({exists:true,name:info.name,size:info.size,updatedAt:info.updatedAt,version:info.version});
+}
+if(pathname==="/api/showroom"&&request.method==="GET"){
+ if(!env.DOCUMENTS)return respond({error:"Private R2 bucket is not configured"},503);
+ const current=await env.DOCUMENTS.get("showroom/current.json");
+ if(!current)return respond({error:"No private showroom has been uploaded"},404);
+ const info=await current.json();
+ if(!/^showroom\/versions\/[a-f0-9-]{36}\.html$/.test(info.key))return respond({error:"Invalid showroom pointer"},500);
+ const doc=await env.DOCUMENTS.get(info.key);
+ if(!doc)return respond({error:"Showroom file unavailable"},404);
+ return new Response(doc.body,{headers:{...h,"Content-Type":"text/html;charset=utf-8","Cache-Control":"no-store","Content-Disposition":"attachment; filename=\"showroom.html\"","X-Content-Type-Options":"nosniff","Content-Security-Policy":"sandbox allow-scripts"}});
+}
+if(pathname==="/api/showroom"&&request.method==="PUT"){
+ if(!env.DOCUMENTS)return respond({error:"Private R2 bucket is not configured"},503);
+ const max=12*1024*1024;
+ const declared=Number(request.headers.get("X-File-Size")||request.headers.get("Content-Length")||"0");
+ if(!Number.isSafeInteger(declared)||declared<1||declared>max)return respond({error:"HTML file must be between 1 byte and 12 MiB"},413);
+ const bytes=await request.arrayBuffer();
+ if(bytes.byteLength!==declared||bytes.byteLength>max)return respond({error:"File size mismatch or exceeds 12 MiB"},413);
+ const sample=new TextDecoder().decode(bytes.slice(0,2048)).trimStart();
+ if(!/^<!doctype\s+html\b|^<html(?:\s|>)/i.test(sample))return respond({error:"Only complete HTML pages are supported"},400);
+ const supplied=request.headers.get("X-Showroom-Name")||"showroom.html";
+ let name="showroom.html";try{name=decodeURIComponent(supplied)}catch{}
+ name=name.slice(0,120).replace(/[\\/<>\x00-\x1f]/g,"_");
+ if(!/\.html?$/i.test(name))return respond({error:"Choose an .html or .htm file"},400);
+ const version=crypto.randomUUID(),key="showroom/versions/"+version+".html",updatedAt=new Date().toISOString();
+ await env.DOCUMENTS.put(key,bytes,{httpMetadata:{contentType:"text/html; charset=utf-8"}});
+ const info={version,key,name,size:bytes.byteLength,updatedAt};
+ await env.DOCUMENTS.put("showroom/current.json",JSON.stringify(info),{httpMetadata:{contentType:"application/json"}});
+ return respond({ok:true,name,size:info.size,updatedAt,version});
+}
 // Files larger than 7 MiB are streamed into a private R2 bucket.
 // No public bucket domain and no long-lived R2 credentials are exposed.
 const r2Match=pathname.match(/^\/api\/r2-file\/([a-f0-9-]{16,48})$/i);
