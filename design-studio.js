@@ -2,7 +2,7 @@
 (()=>{
 "use strict";
 const $=s=>document.querySelector(s);
-const apiBase=()=>localStorage.getItem("interior-api-url")||"https://interior-budget-api.wongtszshan.workers.dev";
+const apiBase=()=>localStorage.getItem("interior-api-url")||"https://interior-budget-api.wangtszshan.workers.dev";
 const token=()=>localStorage.getItem("interior-session-token")||"";
 const state={private:false,loaded:false,busy:false,objectUrl:null};
 const statusText=()=>$("#designUploadStatus");
@@ -35,7 +35,7 @@ async function upload(file){
  state.busy=true;$("#designUploadBtn").disabled=true;setStatus("正在上传私人存储，请不要关闭页面…");
  try{
  const r=await request("/api/showroom",{method:"PUT",headers:{"Content-Type":"text/html;charset=utf-8","X-File-Size":String(file.size),"X-Showroom-Name":encodeURIComponent(file.name)},body:file});
- setStatus("上传成功！当前展示已切换至 "+r.name);state.loaded=false;await loadStatus();
+ setStatus("上传成功！当前展示已切换至 "+r.name);state.busy=false;state.loaded=false;await loadStatus();
  }catch(e){setStatus("上传失败："+e.message,true)}
  finally{state.busy=false;$("#designUploadBtn").disabled=false;$("#designFileInput").value=""}
 }
