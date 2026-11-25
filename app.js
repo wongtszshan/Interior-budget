@@ -291,17 +291,26 @@ async function pull(){
  await refreshFromCloud(true)
 }
 const fileToBase64=f=>new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(",")[1]);r.onerror=()=>reject(Error("读取文件失败"));r.readAsDataURL(f)});
+const syncSleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function readSyncRetry(){
+ for(let n=0;;n++){try{return await api("/api/data")}catch(e){
+  if(n>=3||![429,500,502,503,504].includes(e.status))throw e;
+  setSyncStatus("GitHub 暂时不可用，重试 "+(n+1)+"/3；本地数据已保留");
+  await syncSleep(800*Math.pow(2,n));
+ }}
+}
 async function push(automatic=false){
  if(syncBusy||!connected||conflict||initializing||!dirty)return;
- syncBusy=true;clearTimeout(syncTimer);setSyncStatus("正在同步…");
+ syncBusy=true;clearTimeout(syncTimer);setSyncStatus("正在核对 GitHub 私库…");
  try{
-  const snap=await api("/api/data");
+  const snap=await readSyncRetry();
   if((snap.sha||null)!==(remoteSha||null)){conflict=true;setSyncStatus("其他设备修改了预算，已停止自动覆盖。请导出本地 JSON 备份，再决定如何合并。");toast("跨设备版本冲突，未覆盖云端数据");return;}
   for(const f of state.files.filter(f=>!f.remote)){
    const blob=await getLocalFile(f.id);if(!blob)throw Error("找不到本地附件 "+f.name);
     const {url,token}=apiConfig();
     if(!url||!token)throw Error("请先授权本设备");
-    const response=await fetch(url.replace(/\/+$/,"")+"/api/r2-file/"+encodeURIComponent(f.id),{method:"PUT",headers:{"Authorization":"Bearer "+token,"Content-Type":f.mime,"X-File-Type":f.mime,"X-File-Size":String(blob.size)},body:blob,cache:"no-store"});
+    setSyncStatus("正在上传 R2 文件："+f.name);
+     const response=await fetch(url.replace(/\/+$/,"")+"/api/r2-file/"+encodeURIComponent(f.id),{method:"PUT",headers:{"Authorization":"Bearer "+token,"Content-Type":f.mime,"X-File-Type":f.mime,"X-File-Size":String(blob.size)},body:blob,cache:"no-store"});
     if(!response.ok){const payload=await response.json().catch(()=>({error:"Upload failed"}));throw Error("R2 文件上传失败："+(payload.error||response.status))}
     f.storage="r2";
 
@@ -309,11 +318,27 @@ async function push(automatic=false){
    localStorage.setItem(KEY,JSON.stringify(state));
   }
   const data=structuredClone(state);
-  const res=await api("/api/data",{method:"PUT",body:{data,sha:remoteSha}});
-  setRemoteSha(res.sha);
+  setSyncStatus("R2 已处理，正在同步 GitHub 数据索引…");
+  let verified=null;
+  for(let attempt=0;attempt<4;attempt++){
+   try{await api("/api/data",{method:"PUT",body:{data,sha:remoteSha}})}
+   catch(e){
+    if(![429,500,502,503,504].includes(e.status))throw e;
+    let check;try{check=await readSyncRetry()}catch{throw Error("GitHub 写入结果无法确认，请稍后重试")}
+    if(check.data&&JSON.stringify(check.data)===JSON.stringify(data)){verified=check;break}
+    if((check.sha||null)!==(remoteSha||null)){conflict=true;throw Error("云端版本变化，已停止覆盖")}
+    if(attempt===3)throw e;
+    setSyncStatus("GitHub 临时故障，重试 "+(attempt+1)+"/3");
+    await syncSleep(800*Math.pow(2,attempt));continue;
+   }
+   verified=await readSyncRetry();
+   if(!verified.data||JSON.stringify(verified.data)!==JSON.stringify(data))throw Error("GitHub 写入后复核不一致，本地数据已保留");
+   break;
+  }
+  setRemoteSha(verified.sha);
   if(JSON.stringify(state)===JSON.stringify(data)){clearDirty()}else scheduleSync();
   localStorage.setItem(KEY,JSON.stringify(state));
-  setSyncStatus("已自动同步："+new Date().toLocaleString("zh-CN"));
+  setSyncStatus("GitHub 云端已复核，同步完成："+new Date().toLocaleString("zh-CN"));
   if(!automatic)toast("同步完成");
  }catch(e){
   if(e.status===409){conflict=true;setSyncStatus("云端版本变化，已暂停自动同步。请先备份本地修改。")}
